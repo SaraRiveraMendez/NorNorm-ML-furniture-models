@@ -1,17 +1,19 @@
+import json
 import os
 import zipfile
-import yaml
+from pathlib import Path
+
 import cv2
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras import layers, models
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+import yaml
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-import matplotlib.pyplot as plt
-from pathlib import Path
-import json
+from tensorflow.keras import layers, models
+from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.regularizers import l2
 
 
 class FurnitureRecognitionModel:
@@ -75,9 +77,7 @@ class FurnitureRecognitionModel:
                                     val_images.append(img_path)
                                     val_labels.append(class_id)
 
-        print(
-            f"Found {len(train_images)} training images and {len(val_images)} validation images"
-        )
+        print(f"Found {len(train_images)} training images and {len(val_images)} validation images")
         print(f"Classes: {self.class_names}")
 
         return (train_images, train_labels), (val_images, val_labels)
@@ -124,12 +124,8 @@ class FurnitureRecognitionModel:
         y_val = np.array(y_val)
 
         # Convert labels to categorical
-        y_train_cat = tf.keras.utils.to_categorical(
-            y_train, num_classes=len(self.class_names)
-        )
-        y_val_cat = tf.keras.utils.to_categorical(
-            y_val, num_classes=len(self.class_names)
-        )
+        y_train_cat = tf.keras.utils.to_categorical(y_train, num_classes=len(self.class_names))
+        y_val_cat = tf.keras.utils.to_categorical(y_val, num_classes=len(self.class_names))
 
         # No data augmentation - use original images only
         train_datagen = ImageDataGenerator()
@@ -152,21 +148,26 @@ class FurnitureRecognitionModel:
         base_model = tf.keras.applications.MobileNetV2(
             input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
         )
-        base_model.trainable = False
+        base_model.trainable = True
+        for layer in base_model.layers[:-5]:
+            layer.trainable = False
 
         model = models.Sequential(
             [
                 base_model,
+                layers.Conv2D(256, (3, 3), activation="relu", kernel_regularizer=l2(0.01)),
                 layers.GlobalAveragePooling2D(),
+                layers.Dense(256, activation="relu"),
+                layers.BatchNormalization(),
                 layers.Dropout(0.5),
                 layers.Dense(128, activation="relu"),
-                layers.Dropout(0.5),
+                layers.Dropout(0.4),
                 layers.Dense(num_classes, activation="softmax"),
             ]
         )
 
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-4),
             loss="categorical_crossentropy",
             metrics=["accuracy"],
         )
@@ -205,63 +206,59 @@ class FurnitureRecognitionModel:
 
         return history
 
-    def fine_tune_model(self, train_generator, val_generator, epochs=20):
-        """Fine-tune the model by unfreezing some layers"""
-        print("Starting fine-tuning...")
+    # def fine_tune_model(self, train_generator, val_generator, epochs=20):
+    #     """Fine-tune the model by unfreezing some layers"""
+    #     print("Starting fine-tuning...")
 
-        # Unfreeze the top layers of the base model
-        self.model.layers[0].trainable = True
+    #     # Unfreeze the top layers of the base model
+    #     self.model.layers[0].trainable = True
 
-        # Fine-tune from this layer onwards
-        fine_tune_at = 100
+    #     # Fine-tune from this layer onwards
+    #     fine_tune_at = 100
 
-        # Freeze all the layers before fine_tune_at
-        for layer in self.model.layers[0].layers[:fine_tune_at]:
-            layer.trainable = False
+    #     # Freeze all the layers before fine_tune_at
+    #     for layer in self.model.layers[0].layers[:fine_tune_at]:
+    #         layer.trainable = False
 
-        # Use a lower learning rate for fine-tuning
-        self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001 / 10),
-            loss="categorical_crossentropy",
-            metrics=["accuracy"],
-        )
+    #     # Use a lower learning rate for fine-tuning
+    #     self.model.compile(
+    #         optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001 / 10),
+    #         loss="categorical_crossentropy",
+    #         metrics=["accuracy"],
+    #     )
 
-        callbacks = [
-            EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
-            ModelCheckpoint(
-                "Models/fine_tuned_furniture_model.h5",
-                monitor="val_accuracy",
-                save_best_only=True,
-            ),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-7),
-        ]
+    #     callbacks = [
+    #         EarlyStopping(monitor="val_loss", patience=10, restore_best_weights=True),
+    #         ModelCheckpoint(
+    #             "Models/fine_tuned_furniture_model.h5",
+    #             monitor="val_accuracy",
+    #             save_best_only=True,
+    #         ),
+    #         ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-7),
+    #     ]
 
-        history_fine = self.model.fit(
-            train_generator,
-            steps_per_epoch=len(train_generator),
-            epochs=epochs,
-            validation_data=val_generator,
-            validation_steps=len(val_generator),
-            callbacks=callbacks,
-            verbose=1,
-        )
+    #     history_fine = self.model.fit(
+    #         train_generator,
+    #         steps_per_epoch=len(train_generator),
+    #         epochs=epochs,
+    #         validation_data=val_generator,
+    #         validation_steps=len(val_generator),
+    #         callbacks=callbacks,
+    #         verbose=1,
+    #     )
 
-        return history_fine
+    #     return history_fine
 
     def plot_training_history(self, history, history_fine=None):
         """Plot training history"""
         plt.figure(figsize=(12, 4))
 
-        # Plot training & validation accuracy
-        plt.subplot(1, 2, 1)
         plt.plot(history.history["accuracy"], label="Training Accuracy")
         plt.plot(history.history["val_accuracy"], label="Validation Accuracy")
         if history_fine:
             total_epochs = len(history.history["accuracy"])
             plt.plot(
-                range(
-                    total_epochs, total_epochs + len(history_fine.history["accuracy"])
-                ),
+                range(total_epochs, total_epochs + len(history_fine.history["accuracy"])),
                 history_fine.history["accuracy"],
                 label="Fine-tuning Training Accuracy",
             )
@@ -279,27 +276,25 @@ class FurnitureRecognitionModel:
         plt.legend()
 
         # Plot training & validation loss
-        plt.subplot(1, 2, 2)
-        plt.plot(history.history["loss"], label="Training Loss")
-        plt.plot(history.history["val_loss"], label="Validation Loss")
-        if history_fine:
-            total_epochs = len(history.history["loss"])
-            plt.plot(
-                range(total_epochs, total_epochs + len(history_fine.history["loss"])),
-                history_fine.history["loss"],
-                label="Fine-tuning Training Loss",
-            )
-            plt.plot(
-                range(
-                    total_epochs, total_epochs + len(history_fine.history["val_loss"])
-                ),
-                history_fine.history["val_loss"],
-                label="Fine-tuning Validation Loss",
-            )
-        plt.title("Model Loss")
-        plt.xlabel("Epoch")
-        plt.ylabel("Loss")
-        plt.legend()
+        # plt.subplot(1, 2, 2)
+        # plt.plot(history.history["loss"], label="Training Loss")
+        # plt.plot(history.history["val_loss"], label="Validation Loss")
+        # if history_fine:
+        #     total_epochs = len(history.history["loss"])
+        #     plt.plot(
+        #         range(total_epochs, total_epochs + len(history_fine.history["loss"])),
+        #         history_fine.history["loss"],
+        #         label="Fine-tuning Training Loss",
+        #     )
+        #     plt.plot(
+        #         range(total_epochs, total_epochs + len(history_fine.history["val_loss"])),
+        #         history_fine.history["val_loss"],
+        #         label="Fine-tuning Validation Loss",
+        #     )
+        # plt.title("Model Loss")
+        # plt.xlabel("Epoch")
+        # plt.ylabel("Loss")
+        # plt.legend()
 
         plt.tight_layout()
         plt.show()
@@ -366,9 +361,7 @@ if __name__ == "__main__":
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
 
     # Step 3: Create data generators
-    train_generator, val_generator = furniture_model.create_data_generators(
-        train_data, val_data
-    )
+    train_generator, val_generator = furniture_model.create_data_generators(train_data, val_data)
 
     # Step 4: Build model
     model = furniture_model.build_model(num_classes=len(furniture_model.class_names))
@@ -377,13 +370,11 @@ if __name__ == "__main__":
     # Step 5: Train model
     history = furniture_model.train_model(train_generator, val_generator, epochs=50)
 
-    # Step 6: Fine-tune model (optional)
-    history_fine = furniture_model.fine_tune_model(
-        train_generator, val_generator, epochs=20
-    )
+    # Step 6: Fine-tune model -> It does not get better for now, I don´t need it.
+    # history_fine = furniture_model.fine_tune_model(train_generator, val_generator, epochs=20)
 
     # Step 7: Plot training history
-    furniture_model.plot_training_history(history, history_fine)
+    furniture_model.plot_training_history(history)
 
     # Step 8: Save model
     furniture_model.save_model("Models/furniture_recognition_model.h5")
