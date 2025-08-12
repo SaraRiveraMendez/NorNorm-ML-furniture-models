@@ -5,6 +5,15 @@ TOKEN = os.getenv("ROBOFLOW_API_KEY")
 VERSION = 5
 MODEL_NAME = "furni-set-detect3"
 
+
+def ge():
+    pass
+
+
+def de():
+    pass
+
+
 if __name__ == "__main__":
     rf = Roboflow(api_key=TOKEN)
     project = rf.workspace().project("full-set-menu")
