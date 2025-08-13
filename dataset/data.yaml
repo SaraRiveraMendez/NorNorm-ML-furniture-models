@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 14
+names: ['CANTINE', 'HIGH-TABLE', 'LOUNGE', 'MEETING-TABLE', 'PHONEBOOTH', 'PLANTS', 'PRIVATE-DESK', 'PRIVATE-OFFICE', 'REST-FOR-1', 'REST-FOR-2', 'ROUND-TABLE', 'STORAGE', 'b', 'd']
+
+roboflow:
+  workspace: autodesign
+  project: the-mexican-project-3ghgs
+  version: 4
+  license: Private
+  url: https://universe.roboflow.com/autodesign/the-mexican-project-3ghgs/dataset/4

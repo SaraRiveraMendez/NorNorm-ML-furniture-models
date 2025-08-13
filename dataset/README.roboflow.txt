@@ -1,8 +1,8 @@
 
-The-Mexican-Project - v1 Zoom-Rotation-Dataset
+The-Mexican-Project - v4 2025-08-13 7:45am
 ==============================
 
-This dataset was exported via roboflow.com on August 12, 2025 at 12:14 PM GMT
+This dataset was exported via roboflow.com on August 13, 2025 at 1:45 PM GMT
 
 Roboflow is an end-to-end computer vision platform that helps you
 * collaborate with your team on computer vision projects
@@ -17,18 +17,18 @@ visit https://github.com/roboflow/notebooks
 
 To find over 100k other datasets and pre-trained models, visit https://universe.roboflow.com
 
-The dataset includes 145 images.
+The dataset includes 195 images.
 Furniture-5UEP-MjKS are annotated in YOLOv12 format.
 
 The following pre-processing was applied to each image:
 * Auto-orientation of pixel data (with EXIF-orientation stripping)
-* Resize to 1024x1024 (Stretch)
+* Resize to 640x640 (Stretch)
 
 The following augmentation was applied to create 3 versions of each source image:
 * 50% probability of horizontal flip
 * 50% probability of vertical flip
 * Random rotation of between -15 and +15 degrees
-* Random Gaussian blur of between 0 and 1.6 pixels
-* Salt and pepper noise was applied to 1.89 percent of pixels
+* Random Gaussian blur of between 0 and 2.5 pixels
+* Salt and pepper noise was applied to 1.93 percent of pixels
 
 
