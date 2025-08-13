@@ -41,6 +41,8 @@ rotate_data_*/
 tuner_results/
 rotate_model_*
 data/
+dataset/
+Models/
 
 # Models
 furni-detect3/
