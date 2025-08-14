@@ -14,7 +14,7 @@ Copy `settings_example.py` in the `/settings` folder and name it `settings.py`. 
 # Run Virtual Machine
 
 ## Setup
-### InstaMac
+### Install Google Client (Mac)
     brew install --cask google-cloud-sdk
 
 ### Install Google Client (Windows)
