@@ -22,7 +22,7 @@ from tensorflow.keras.regularizers import l2
 
 
 class OptimizedFurnitureModel:
-    def __init__(self, img_size=(624, 624), batch_size=8):
+    def __init__(self, img_size=(624, 624), batch_size=32):
         self.img_size = img_size
         self.batch_size = batch_size
         self.label_encoder = LabelEncoder()
