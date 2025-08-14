@@ -11,7 +11,12 @@ import yaml
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from tensorflow.keras import layers, models
-from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from tensorflow.keras.callbacks import (
+    Callback,
+    EarlyStopping,
+    ModelCheckpoint,
+    ReduceLROnPlateau,
+)
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.regularizers import l2
 
@@ -57,16 +62,22 @@ class OptimizedFurnitureModel:
                     if os.path.exists(label_path):
                         with open(label_path, "r") as f:
                             lines = f.readlines()
-                            if lines:
-                                class_id = int(lines[0].split()[0])
-                                if split == "train":
-                                    train_images.append(img_path)
-                                    train_labels.append(class_id)
-                                else:
-                                    val_images.append(img_path)
-                                    val_labels.append(class_id)
+                            for line in lines:
+                                try:
+                                    class_id = int(line.split()[0])
+                                    if split == "train":
+                                        train_images.append(img_path)
+                                        train_labels.append(class_id)
+                                    else:
+                                        val_images.append(img_path)
+                                        val_labels.append(class_id)
+                                except (IndexError, ValueError):
+                                    continue
 
-        print(f"Training: {len(train_images)}, Validation: {len(val_images)}")
+        print(f"Training samples: {len(train_images)}, Validation samples: {len(val_images)}")
+        print(
+            f"Class distribution - Train: {np.bincount(train_labels)}, Val: {np.bincount(val_labels)}"
+        )
         return (train_images, train_labels), (val_images, val_labels)
 
     def load_and_preprocess_image(self, image_path):
@@ -162,6 +173,8 @@ class OptimizedFurnitureModel:
                 monitor="val_loss", patience=15, restore_best_weights=True, min_delta=0.001
             ),
             ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=10, min_lr=1e-6),
+            LearningRateTracker(),  # Callback for tracking the LR
+            ModelCheckpoint(monitor="val_accuracy", save_best_only=True, mode="max"),
         ]
 
         steps_per_epoch = len(train_generator)
@@ -204,52 +217,36 @@ class OptimizedFurnitureModel:
 
     def plot_training_history(self, history):
         """Comprehensive training visualization"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-
-        # Accuracy
-        axes[0, 0].plot(history.history["accuracy"], label="Training", linewidth=2)
-        axes[0, 0].plot(history.history["val_accuracy"], label="Validation", linewidth=2)
-        axes[0, 0].set_title("Model Accuracy")
-        axes[0, 0].set_xlabel("Epoch")
-        axes[0, 0].set_ylabel("Accuracy")
-        axes[0, 0].legend()
-        axes[0, 0].grid(True, alpha=0.3)
-
-        # Loss
-        axes[0, 1].plot(history.history["loss"], label="Training", linewidth=2)
-        axes[0, 1].plot(history.history["val_loss"], label="Validation", linewidth=2)
-        axes[0, 1].set_title("Model Loss")
-        axes[0, 1].set_xlabel("Epoch")
-        axes[0, 1].set_ylabel("Loss")
-        axes[0, 1].legend()
-        axes[0, 1].grid(True, alpha=0.3)
+        plt.figure(figsize=(18, 6))
 
         # Learning Rate
+        plt.subplot(1, 3, 1)
         if "lr" in history.history:
-            axes[1, 0].plot(history.history["lr"], linewidth=2)
-            axes[1, 0].set_title("Learning Rate")
-            axes[1, 0].set_xlabel("Epoch")
-            axes[1, 0].set_ylabel("Learning Rate")
-            axes[1, 0].set_yscale("log")
-            axes[1, 0].grid(True, alpha=0.3)
+            plt.semilogy(history.history["lr"], linewidth=2)
+        plt.title("Learning Rate Evolution")
+        plt.xlabel("Epoch")
+        plt.ylabel("Learning Rate (log scale)")
+        plt.grid(True, alpha=0.3)
 
-        # Overfitting analysis
-        train_acc = np.array(history.history["accuracy"])
-        val_acc = np.array(history.history["val_accuracy"])
-        gap = train_acc - val_acc
+        # Accuracy
+        plt.subplot(1, 3, 2)
+        plt.plot(history.history["accuracy"], label="Train", linewidth=2)
+        plt.plot(history.history["val_accuracy"], label="Validation", linewidth=2)
+        plt.title("Model Accuracy")
+        plt.xlabel("Epoch")
+        plt.ylabel("Accuracy")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
 
-        axes[1, 1].plot(gap, linewidth=2, color="red")
-        axes[1, 1].set_title("Overfitting Gap (Train - Val Accuracy)")
-        axes[1, 1].set_xlabel("Epoch")
-        axes[1, 1].set_ylabel("Accuracy Gap")
-        axes[1, 1].grid(True, alpha=0.3)
-        axes[1, 1].axhline(
-            y=0.1, color="orange", linestyle="--", alpha=0.7, label="Mild Overfitting"
-        )
-        axes[1, 1].axhline(
-            y=0.2, color="red", linestyle="--", alpha=0.7, label="Severe Overfitting"
-        )
-        axes[1, 1].legend()
+        # Loss
+        plt.subplot(1, 3, 3)
+        plt.plot(history.history["loss"], label="Train", linewidth=2)
+        plt.plot(history.history["val_loss"], label="Validation", linewidth=2)
+        plt.title("Model Loss")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.show()
@@ -263,36 +260,24 @@ class OptimizedFurnitureModel:
         if image is None:
             return None
 
-        image = np.expand_dims(image, axis=0)
-        predictions = self.model.predict(image, verbose=0)
+        # Making the prediction
+        image_batch = np.expand_dims(image, axis=0)
+        predictions = self.model.predict(image_batch, verbose=0)[0]
 
-        predicted_class = np.argmax(predictions[0])
-        confidence = np.max(predictions[0])
+        # Top 5 predictions
+        top_k = min(5, len(self.class_names))
+        top_indices = np.argsort(predictions)[-top_k:][::-1]
+        top_predictions = [
+            {"class": self.class_names[i], "confidence": float(predictions[i]), "class_id": int(i)}
+            for i in top_indices
+        ]
 
-        # Get top 3 predictions
-        top_3_indices = np.argsort(predictions[0])[-3:][::-1]
-        top_3_predictions = [(i, predictions[0][i]) for i in top_3_indices]
-
-        result = {
-            "predicted_class": (
-                self.class_names[predicted_class]
-                if self.class_names
-                else f"Class_{predicted_class}"
-            ),
-            "confidence": float(confidence),
-            "class_id": int(predicted_class),
-            "is_confident": confidence > threshold,
-            "top_3_predictions": [
-                {
-                    "class": self.class_names[i] if self.class_names else f"Class_{i}",
-                    "confidence": float(conf),
-                    "class_id": int(i),
-                }
-                for i, conf in top_3_predictions
-            ],
+        return {
+            "top_predictions": top_predictions,
+            "predicted_class": top_predictions[0]["class"],
+            "confidence": top_predictions[0]["confidence"],
+            "is_confident": top_predictions[0]["confidence"] >= threshold,
         }
-
-        return result
 
     def predict(self, image_path):
         """Standard prediction method for compatibility"""
