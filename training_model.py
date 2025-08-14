@@ -12,8 +12,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from tensorflow.keras import layers, models
 from tensorflow.keras.callbacks import (
-    Callback,
     EarlyStopping,
+    LearningRateScheduler,
     ModelCheckpoint,
     ReduceLROnPlateau,
 )
@@ -173,7 +173,7 @@ class OptimizedFurnitureModel:
                 monitor="val_loss", patience=15, restore_best_weights=True, min_delta=0.001
             ),
             ReduceLROnPlateau(monitor="val_loss", factor=0.2, patience=10, min_lr=1e-6),
-            LearningRateTracker(),  # Callback for tracking the LR
+            LearningRateScheduler(),  # Callback for tracking the LR
             ModelCheckpoint(monitor="val_accuracy", save_best_only=True, mode="max"),
         ]
 
