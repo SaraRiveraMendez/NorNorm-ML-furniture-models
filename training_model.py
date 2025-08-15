@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import cv2
+import gdown
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
@@ -310,7 +311,13 @@ if __name__ == "__main__":
     # Reduced batch size for high resolution images
     furniture_model = OptimizedFurnitureModel(img_size=(624, 624), batch_size=4)
 
-    dataset_path = furniture_model.extract_dataset("data/The-Mexican-Project.v4i.yolov12.zip")
+    file_id = "1cT9AlOO4CbsFkGMzzp54nw4_Y7RgmVvF"
+    url = f"https://drive.google.com/uc?id={file_id}"
+    output = "The-Mexican-Project.v4i.yolov12.zip"
+
+    gdown.download(url, output, quiet=False)
+
+    dataset_path = furniture_model.extract_dataset(output)
 
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
     train_generator, val_generator = furniture_model.create_data_generators(train_data, val_data)
