@@ -422,13 +422,10 @@ class OptimizedFurnitureModel:
 if __name__ == "__main__":
     furniture_model = OptimizedFurnitureModel(img_size=(624, 624), batch_size=4)
 
-    # Option 1: Remote download with temporary storage
-    gdrive_file_id = "1cT9AlOO4CbsFkGMzzp54nw4_Y7RgmVvF"
+    # Remote download with temporary storage
+    gdrive_file_id = "1GvXf7jalRQw0Vd_17Dxa-vwlgPKJ7zCf"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
-
-    # Option 2: Fully streaming approach (uncomment to use)
-    # train_data, val_data = furniture_model.stream_remote_dataset(gdrive_file_id)
 
     # Use memory-efficient generators
     train_generator, val_generator = furniture_model.create_memory_efficient_generators(
