@@ -1,4 +1,4 @@
-roboflow>=1.1.6
+roboflow>=1.2.5
 ultralytics>=8.3.177
 tensorflow>=2.17
 opencv-python>=4.12.0.88
