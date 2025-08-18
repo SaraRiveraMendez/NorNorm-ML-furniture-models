@@ -18,9 +18,7 @@ from tensorflow.keras.regularizers import l2
 
 
 class ImprovedFurnitureModel:
-    def __init__(
-        self, img_size=(224, 224), batch_size=16
-    ):  # Tamaño más estándar y batch size mayor
+    def __init__(self, img_size=(224, 224), batch_size=16):
         self.img_size = img_size
         self.batch_size = batch_size
         self.label_encoder = LabelEncoder()
@@ -303,7 +301,7 @@ class ImprovedFurnitureModel:
         """Entrenamiento progresivo con diferentes fases"""
 
         # Fase 1: Entrenamiento con capas congeladas (warm-up)
-        print("=== FASE 1: Warm-up (capas base congeladas) ===")
+        print("=== PHASE 1: Warm-up (base layers frozen) ===")
 
         # Congelar todas las capas del modelo base
         for layer in self.model.layers[0].layers:
@@ -338,11 +336,11 @@ class ImprovedFurnitureModel:
             verbose=1,
         )
 
-        # Fase 2: Fine-tuning completo
-        print("\n=== FASE 2: Fine-tuning completo ===")
+        # Phase 2: Complete fine-tuning
+        print("\n=== PHASE 2: Complete fine-tuning ===")
 
-        # Descongelar capas gradualment
-        for layer in self.model.layers[0].layers[-50:]:  # Últimas 50 capas
+        # Gradually unfreeze layers
+        for layer in self.model.layers[0].layers[-50:]:  # Last 50 layers
             layer.trainable = True
 
         # Recompile with lower learning rate
@@ -371,7 +369,7 @@ class ImprovedFurnitureModel:
             ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=8, min_lr=1e-8, verbose=1),
         ]
 
-        # Entrenar segunda fase
+        # Train second phase
         remaining_epochs = epochs - len(history1.history["loss"])
         history2 = self.model.fit(
             train_generator,
@@ -381,18 +379,18 @@ class ImprovedFurnitureModel:
             verbose=1,
         )
 
-        # Combinar historiales
+        # Combine histories
         combined_history = self.combine_histories(history1, history2)
 
         return combined_history
 
     def combine_histories(self, hist1, hist2):
-        """Combinar dos historiales de entrenamiento"""
+        """Combine two training histories"""
         combined = {}
         for key in hist1.history.keys():
             combined[key] = hist1.history[key] + hist2.history[key]
 
-        # Crear objeto tipo History
+        # Create History-like object
         class CombinedHistory:
             def __init__(self, history_dict):
                 self.history = history_dict
@@ -400,80 +398,78 @@ class ImprovedFurnitureModel:
         return CombinedHistory(combined)
 
     def evaluate_model_performance(self, history):
-        """Análisis detallado del rendimiento"""
+        """Detailed performance analysis"""
         final_train_acc = history.history["accuracy"][-1]
         final_val_acc = history.history["val_accuracy"][-1]
         best_val_acc = max(history.history["val_accuracy"])
 
-        # Top-3 accuracy si está disponible
+        # Top-3 accuracy if available
         final_top3_acc = history.history.get("val_top_3_accuracy", [0])[-1]
 
         gap = final_train_acc - final_val_acc
 
         print(f"\n{'='*50}")
-        print(f"RESUMEN DE RENDIMIENTO DEL MODELO")
+        print(f"MODEL PERFORMANCE SUMMARY")
         print(f"{'='*50}")
-        print(f"Accuracy Final Entrenamiento: {final_train_acc:.4f}")
-        print(f"Accuracy Final Validación:    {final_val_acc:.4f}")
-        print(f"Mejor Accuracy Validación:    {best_val_acc:.4f}")
-        print(f"Top-3 Accuracy Validación:    {final_top3_acc:.4f}")
-        print(f"Gap Overfitting:              {gap:.4f}")
+        print(f"Final Training Accuracy:    {final_train_acc:.4f}")
+        print(f"Final Validation Accuracy:  {final_val_acc:.4f}")
+        print(f"Best Validation Accuracy:   {best_val_acc:.4f}")
+        print(f"Top-3 Validation Accuracy:  {final_top3_acc:.4f}")
+        print(f"Overfitting Gap:            {gap:.4f}")
         print(f"{'='*50}")
 
         if gap > 0.2:
-            print("❌ ESTADO: Overfitting severo detectado")
-            print("💡 RECOMENDACIÓN: Aumentar regularización o más datos")
+            print("STATUS: Severe overfitting detected")
+            print("RECOMMENDATION: Increase regularization or add more data")
         elif gap > 0.1:
-            print("⚠️  ESTADO: Overfitting moderado")
-            print("💡 RECOMENDACIÓN: Considerar más regularización")
+            print("STATUS: Moderate overfitting")
+            print("RECOMMENDATION: Consider additional regularization")
         else:
-            print("✅ ESTADO: Buena generalización")
+            print("STATUS: Good generalization")
 
         print(f"{'='*50}")
 
     def plot_comprehensive_training_history(self, history):
-        """Visualización completa del entrenamiento"""
+        """Complete training visualization"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
-        fig.suptitle("Análisis Completo del Entrenamiento", fontsize=16, fontweight="bold")
+        fig.suptitle("Complete Training Analysis", fontsize=16, fontweight="bold")
 
         # Accuracy
+        axes[0, 0].plot(history.history["accuracy"], label="Training", linewidth=2, color="blue")
         axes[0, 0].plot(
-            history.history["accuracy"], label="Entrenamiento", linewidth=2, color="blue"
+            history.history["val_accuracy"], label="Validation", linewidth=2, color="red"
         )
-        axes[0, 0].plot(
-            history.history["val_accuracy"], label="Validación", linewidth=2, color="red"
-        )
-        axes[0, 0].set_title("Accuracy del Modelo")
-        axes[0, 0].set_xlabel("Época")
+        axes[0, 0].set_title("Model Accuracy")
+        axes[0, 0].set_xlabel("Epoch")
         axes[0, 0].set_ylabel("Accuracy")
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
 
         # Loss
-        axes[0, 1].plot(history.history["loss"], label="Entrenamiento", linewidth=2, color="blue")
-        axes[0, 1].plot(history.history["val_loss"], label="Validación", linewidth=2, color="red")
-        axes[0, 1].set_title("Loss del Modelo")
-        axes[0, 1].set_xlabel("Época")
+        axes[0, 1].plot(history.history["loss"], label="Training", linewidth=2, color="blue")
+        axes[0, 1].plot(history.history["val_loss"], label="Validation", linewidth=2, color="red")
+        axes[0, 1].set_title("Model Loss")
+        axes[0, 1].set_xlabel("Epoch")
         axes[0, 1].set_ylabel("Loss")
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
 
-        # Top-3 Accuracy (si está disponible)
+        # Top-3 Accuracy (if available)
         if "val_top_3_accuracy" in history.history:
             axes[0, 2].plot(
                 history.history["top_3_accuracy"],
-                label="Top-3 Entrenamiento",
+                label="Top-3 Training",
                 linewidth=2,
                 color="green",
             )
             axes[0, 2].plot(
                 history.history["val_top_3_accuracy"],
-                label="Top-3 Validación",
+                label="Top-3 Validation",
                 linewidth=2,
                 color="orange",
             )
             axes[0, 2].set_title("Top-3 Accuracy")
-            axes[0, 2].set_xlabel("Época")
+            axes[0, 2].set_xlabel("Epoch")
             axes[0, 2].set_ylabel("Top-3 Accuracy")
             axes[0, 2].legend()
             axes[0, 2].grid(True, alpha=0.3)
@@ -482,31 +478,31 @@ class ImprovedFurnitureModel:
         if "lr" in history.history:
             axes[1, 0].plot(history.history["lr"], linewidth=2, color="purple")
             axes[1, 0].set_title("Learning Rate")
-            axes[1, 0].set_xlabel("Época")
+            axes[1, 0].set_xlabel("Epoch")
             axes[1, 0].set_ylabel("Learning Rate")
             axes[1, 0].set_yscale("log")
             axes[1, 0].grid(True, alpha=0.3)
 
-        # Análisis de Overfitting
+        # Overfitting Analysis
         train_acc = np.array(history.history["accuracy"])
         val_acc = np.array(history.history["val_accuracy"])
         gap = train_acc - val_acc
 
         axes[1, 1].plot(gap, linewidth=2, color="red")
-        axes[1, 1].set_title("Gap de Overfitting (Train - Val)")
-        axes[1, 1].set_xlabel("Época")
-        axes[1, 1].set_ylabel("Diferencia de Accuracy")
+        axes[1, 1].set_title("Overfitting Gap (Train - Val)")
+        axes[1, 1].set_xlabel("Epoch")
+        axes[1, 1].set_ylabel("Accuracy Difference")
         axes[1, 1].grid(True, alpha=0.3)
-        axes[1, 1].axhline(y=0.05, color="yellow", linestyle="--", alpha=0.7, label="Límite Ideal")
+        axes[1, 1].axhline(y=0.05, color="yellow", linestyle="--", alpha=0.7, label="Ideal Limit")
         axes[1, 1].axhline(
-            y=0.1, color="orange", linestyle="--", alpha=0.7, label="Overfitting Leve"
+            y=0.1, color="orange", linestyle="--", alpha=0.7, label="Mild Overfitting"
         )
         axes[1, 1].axhline(
-            y=0.2, color="red", linestyle="--", alpha=0.7, label="Overfitting Severo"
+            y=0.2, color="red", linestyle="--", alpha=0.7, label="Severe Overfitting"
         )
         axes[1, 1].legend()
 
-        # Suavizado de métricas
+        # Smoothed metrics
         window = min(10, len(history.history["val_accuracy"]) // 4)
         if window > 1:
             val_acc_smooth = np.convolve(
@@ -515,7 +511,7 @@ class ImprovedFurnitureModel:
             axes[1, 2].plot(
                 range(window - 1, len(history.history["val_accuracy"])),
                 val_acc_smooth,
-                label=f"Val Accuracy (suavizado {window})",
+                label=f"Val Accuracy (smoothed {window})",
                 linewidth=2,
                 color="red",
             )
@@ -526,8 +522,8 @@ class ImprovedFurnitureModel:
                 alpha=0.5,
                 color="lightcoral",
             )
-            axes[1, 2].set_title("Accuracy Validación Suavizada")
-            axes[1, 2].set_xlabel("Época")
+            axes[1, 2].set_title("Smoothed Validation Accuracy")
+            axes[1, 2].set_xlabel("Epoch")
             axes[1, 2].set_ylabel("Accuracy")
             axes[1, 2].legend()
             axes[1, 2].grid(True, alpha=0.3)
@@ -536,7 +532,7 @@ class ImprovedFurnitureModel:
         plt.show()
 
     def predict_with_confidence_analysis(self, image_path, threshold=0.7):
-        """Predicción mejorada con análisis de confianza"""
+        """Enhanced prediction with confidence analysis"""
         if self.model is None:
             return None
 
@@ -550,7 +546,7 @@ class ImprovedFurnitureModel:
         predicted_class = np.argmax(predictions[0])
         confidence = np.max(predictions[0])
 
-        # Top 5 predicciones
+        # Top 5 predictions
         top_5_indices = np.argsort(predictions[0])[-5:][::-1]
         top_5_predictions = [(i, predictions[0][i]) for i in top_5_indices]
 
@@ -573,7 +569,7 @@ class ImprovedFurnitureModel:
             ],
             "entropy": float(
                 -np.sum(predictions[0] * np.log(predictions[0] + 1e-8))
-            ),  # Medida de incertidumbre
+            ),  # Uncertainty measure
         }
 
         return result
@@ -583,7 +579,7 @@ class ImprovedFurnitureModel:
             os.makedirs("Models", exist_ok=True)
             self.model.save(filepath)
 
-            # Guardar metadatos
+            # Saving metadata
             metadata = {
                 "class_names": self.class_names,
                 "img_size": self.img_size,
@@ -594,44 +590,36 @@ class ImprovedFurnitureModel:
             with open(filepath.replace(".h5", "_metadata.json"), "w") as f:
                 json.dump(metadata, f, indent=2)
 
-            print(f"Modelo y metadatos guardados en: {filepath}")
+            print(f"Model and metadata saved to: {filepath}")
 
     def load_model(self, filepath="Models/improved_furniture_model.h5"):
         self.model = tf.keras.models.load_model(filepath)
 
-        # Cargar metadatos
+        # Loading metadata
         metadata_path = filepath.replace(".h5", "_metadata.json")
         try:
             with open(metadata_path, "r") as f:
                 metadata = json.load(f)
                 self.class_names = metadata.get("class_names", [])
                 self.img_size = tuple(metadata.get("img_size", (224, 224)))
-            print(f"Modelo y metadatos cargados desde: {filepath}")
+            print(f"Model and metadata loaded from: {filepath}")
         except FileNotFoundError:
-            print("Archivo de metadatos no encontrado, usando valores por defecto")
+            print("Metadata file not found, using default values")
 
 
-# Función principal mejorada
 def main():
-    print("🚀 Iniciando entrenamiento del modelo mejorado de muebles")
 
-    # Configuración optimizada
+    # Configuration
     furniture_model = ImprovedFurnitureModel(
-        img_size=(224, 224),  # Tamaño estándar para EfficientNet
-        batch_size=16,  # Batch size más grande
+        img_size=(224, 224), batch_size=16  # Bigger batch size
     )
 
-    # Descargar y procesar dataset
+    # Downloading the dataset
     gdrive_file_id = "1i3cNtxQ0xZTn2-ytDYMLpmYEgBGSI3UP"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
 
-    # Verificar que tenemos datos suficientes
-    if len(train_data[0]) == 0:
-        print("❌ Error: No se encontraron datos de entrenamiento")
-        return
-
-    print(f"✅ Datos cargados: {len(train_data[0])} entrenamiento, {len(val_data[0])} validación")
+    print(f"{len(train_data[0])} training, {len(val_data[0])} validation")
 
     # Crear generadores con data augmentation
     train_generator, val_generator = furniture_model.create_data_generators_with_augmentation(
@@ -640,8 +628,8 @@ def main():
 
     # Construir modelo mejorado
     model = furniture_model.build_improved_model(num_classes=len(furniture_model.class_names))
-    print(f"📊 Parámetros del modelo: {model.count_params():,}")
-    print(f"📊 Número de clases: {len(furniture_model.class_names)}")
+    print(f"Model´s parameters: {model.count_params():,}")
+    print(f"Number of classes: {len(furniture_model.class_names)}")
 
     # Entrenamiento progresivo
     history = furniture_model.train_with_progressive_learning(
@@ -660,9 +648,7 @@ def main():
 
     if os.path.exists("dataset/"):
         shutil.rmtree("dataset/")
-        print("🧹 Dataset temporal limpiado")
-
-    print("🎉 Entrenamiento completado!")
+        print("Temporal dataset cleaned")
 
 
 if __name__ == "__main__":
