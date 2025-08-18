@@ -4,6 +4,7 @@ import zipfile
 from pathlib import Path
 
 import cv2
+import gdown
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
