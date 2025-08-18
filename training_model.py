@@ -52,25 +52,28 @@ class ImprovedFurnitureModel:
         return extract_path
 
     def parse_yolo_annotations(self, dataset_path):
-        """Mejorada para manejar mejor las anotaciones YOLO"""
+        """Extract ALL elements from each image, creating multiple training samples per image"""
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
                 data_config = yaml.safe_load(f)
                 self.class_names = data_config.get("names", [])
-                print(f"Clases encontradas: {self.class_names}")
+                print(f"Classes found: {self.class_names}")
 
         train_images = []
         train_labels = []
         val_images = []
         val_labels = []
 
+        total_elements = 0
+        images_processed = 0
+
         for split in ["train", "valid"]:
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
             if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
-                print(f"Directorio {split} no encontrado")
+                print(f"Directory {split} not found")
                 continue
 
             for img_file in os.listdir(images_dir):
@@ -82,23 +85,37 @@ class ImprovedFurnitureModel:
                     if os.path.exists(label_path):
                         with open(label_path, "r") as f:
                             lines = f.readlines()
-                            if lines:
-                                # Tomar solo la primera línea (primera detección)
-                                class_id = int(lines[0].split()[0])
+                            elements_in_image = 0
 
-                                # Verificar que el class_id sea válido
-                                if 0 <= class_id < len(self.class_names):
-                                    if split == "train":
-                                        train_images.append(img_path)
-                                        train_labels.append(class_id)
-                                    else:
-                                        val_images.append(img_path)
-                                        val_labels.append(class_id)
+                            # Process ALL lines (all elements in the image)
+                            for line in lines:
+                                if line.strip():
+                                    parts = line.strip().split()
+                                    if len(parts) >= 5:  # class_id, x, y, w, h
+                                        class_id = int(parts[0])
 
-        print(f"Training: {len(train_images)}, Validation: {len(val_images)}")
-        print(f"Distribución de clases en entrenamiento:")
+                                        # Verify valid class_id
+                                        if 0 <= class_id < len(self.class_names):
+                                            if split == "train":
+                                                train_images.append(img_path)
+                                                train_labels.append(class_id)
+                                            else:
+                                                val_images.append(img_path)
+                                                val_labels.append(class_id)
 
-        # Mostrar distribución de clases
+                                            elements_in_image += 1
+                                            total_elements += 1
+
+                            if elements_in_image > 0:
+                                images_processed += 1
+
+        print(f"Images processed: {images_processed}")
+        print(f"Total elements extracted: {total_elements}")
+        print(f"Training samples: {len(train_images)}, Validation samples: {len(val_images)}")
+        print(f"Average elements per image: {total_elements/images_processed:.2f}")
+
+        # Show class distribution
+        print(f"Class distribution in training:")
         unique, counts = np.unique(train_labels, return_counts=True)
         for class_id, count in zip(unique, counts):
             class_name = (
@@ -106,7 +123,7 @@ class ImprovedFurnitureModel:
                 if class_id < len(self.class_names)
                 else f"Unknown_{class_id}"
             )
-            print(f"  {class_name}: {count} imágenes")
+            print(f"  {class_name}: {count} samples")
 
         return (train_images, train_labels), (val_images, val_labels)
 
@@ -263,10 +280,20 @@ class ImprovedFurnitureModel:
 
         # Learning rate más alto inicialmente
         initial_learning_rate = 1e-4
+
+        # Crear métrica top-3 personalizada si no existe
+        try:
+            # Intentar usar la métrica estándar
+            top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
+            metrics = ["accuracy", top3_metric]
+        except AttributeError:
+            # Si no existe, usar solo accuracy
+            metrics = ["accuracy"]
+
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
             loss="categorical_crossentropy",
-            metrics=["accuracy", "top_3_accuracy"],
+            metrics=metrics,
         )
 
         self.model = model
@@ -283,10 +310,16 @@ class ImprovedFurnitureModel:
             layer.trainable = False
 
         # Recompilar con learning rate más alto
+        try:
+            top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
+            metrics = ["accuracy", top3_metric]
+        except AttributeError:
+            metrics = ["accuracy"]
+
         self.model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
             loss="categorical_crossentropy",
-            metrics=["accuracy", "top_3_accuracy"],
+            metrics=metrics,
         )
 
         callbacks_phase1 = [
@@ -312,11 +345,17 @@ class ImprovedFurnitureModel:
         for layer in self.model.layers[0].layers[-50:]:  # Últimas 50 capas
             layer.trainable = True
 
-        # Recompilar con learning rate más bajo
+        # Recompile with lower learning rate
+        try:
+            top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
+            metrics = ["accuracy", top3_metric]
+        except AttributeError:
+            metrics = ["accuracy"]
+
         self.model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
             loss="categorical_crossentropy",
-            metrics=["accuracy", "top_3_accuracy"],
+            metrics=metrics,
         )
 
         callbacks_phase2 = [
