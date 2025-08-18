@@ -1,5 +1,8 @@
 import json
 import os
+
+# Clean up temporary dataset
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -126,7 +129,7 @@ class ImprovedFurnitureModel:
         return (train_images, train_labels), (val_images, val_labels)
 
     def load_and_preprocess_image(self, image_path):
-        """Preprocesamiento mejorado de imágenes"""
+        """Load and preprocess a single image"""
         try:
             image = cv2.imread(image_path)
             if image is None:
@@ -140,40 +143,22 @@ class ImprovedFurnitureModel:
             print(f"Error loading image {image_path}: {e}")
             return None
 
-    def create_data_generators_with_augmentation(self, train_data, val_data):
-        """Generadores de datos con data augmentation"""
+    def create_data_generators(self, train_data, val_data):
+        """Create data generators without augmentation since dataset already includes it"""
         train_images, train_labels = train_data
         val_images, val_labels = val_data
 
-        # Convertir labels a categórico
+        # Encode labels to categorical
         num_classes = len(self.class_names)
-        y_train_cat = tf.keras.utils.to_categorical(train_labels, num_classes=num_classes)
-        y_val_cat = tf.keras.utils.to_categorical(val_labels, num_classes=num_classes)
-
-        # Data augmentation para entrenamiento
-        train_datagen = ImageDataGenerator(
-            rotation_range=20,
-            width_shift_range=0.1,
-            height_shift_range=0.1,
-            horizontal_flip=True,
-            zoom_range=0.1,
-            fill_mode="nearest",
-            brightness_range=[0.8, 1.2],
-            shear_range=0.1,
-        )
-
-        # Sin augmentation para validación
-        val_datagen = ImageDataGenerator()
+        y_train_cat = tf.keras.utils.to_categorical(train_labels, num_classes)
+        y_val_cat = tf.keras.utils.to_categorical(val_labels, num_classes)
 
         class ImprovedSequence(tf.keras.utils.Sequence):
-            def __init__(
-                self, image_paths, labels, batch_size, img_size, datagen=None, shuffle=True
-            ):
+            def __init__(self, image_paths, labels, batch_size, img_size, shuffle=True):
                 self.image_paths = image_paths
                 self.labels = labels
                 self.batch_size = batch_size
                 self.img_size = img_size
-                self.datagen = datagen
                 self.shuffle = shuffle
                 self.indices = np.arange(len(self.image_paths))
                 self.on_epoch_end()
@@ -196,17 +181,12 @@ class ImprovedFurnitureModel:
 
                         image = self.load_and_preprocess_image_batch(img_path)
                         if image is not None:
-                            # Aplicar data augmentation si está disponible
-                            if self.datagen is not None:
-                                image = image.reshape((1,) + image.shape)
-                                image = self.datagen.flow(image, batch_size=1)[0][0]
-
                             batch_images.append(image)
                             batch_labels.append(label)
 
-                # Asegurar que tenemos al menos una imagen
+                # Ensure we have at least one image
                 if not batch_images:
-                    # Crear batch vacío válido
+                    # Create valid empty batch
                     batch_images = [np.zeros((*self.img_size, 3))]
                     batch_labels = [
                         np.zeros(len(self.labels[0]) if len(self.labels) > 0 else num_classes)
@@ -215,6 +195,7 @@ class ImprovedFurnitureModel:
                 return np.array(batch_images), np.array(batch_labels)
 
             def load_and_preprocess_image_batch(self, image_path):
+                """Load and preprocess image for batch processing"""
                 try:
                     image = cv2.imread(image_path)
                     if image is None:
@@ -231,41 +212,36 @@ class ImprovedFurnitureModel:
                     np.random.shuffle(self.indices)
 
         train_generator = ImprovedSequence(
-            train_images,
-            y_train_cat,
-            self.batch_size,
-            self.img_size,
-            datagen=train_datagen,
-            shuffle=True,
+            train_images, y_train_cat, self.batch_size, self.img_size, shuffle=True
         )
         val_generator = ImprovedSequence(
-            val_images, y_val_cat, self.batch_size, self.img_size, datagen=None, shuffle=False
+            val_images, y_val_cat, self.batch_size, self.img_size, shuffle=False
         )
 
         return train_generator, val_generator
 
-    def build_improved_model(self, num_classes):
-        """Arquitectura mejorada y más balanceada"""
-        # Usar EfficientNetB0 que es más moderno y eficiente
+    def build_model(self, num_classes):
+        """Build improved model with EfficientNetB0 and fine-tuning"""
+        # Use EfficientNetB0 which is more modern and efficient
         base_model = tf.keras.applications.EfficientNetB0(
             input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
         )
 
-        # Estrategia de fine-tuning más inteligente
+        # Fine-tuning strategy
         base_model.trainable = True
 
-        # Congelar las primeras capas, descongelar las últimas
+        # Freeze initial layers, unfreeze last layers
         fine_tune_at = len(base_model.layers) - 30
         for layer in base_model.layers[:fine_tune_at]:
             layer.trainable = False
 
-        # Arquitectura más balanceada
+        # Build complete model architecture
         model = models.Sequential(
             [
                 base_model,
                 layers.GlobalAveragePooling2D(),
                 layers.BatchNormalization(),
-                layers.Dropout(0.3),  # Dropout más moderado
+                layers.Dropout(0.3),
                 layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001)),
                 layers.BatchNormalization(),
                 layers.Dropout(0.4),
@@ -276,16 +252,14 @@ class ImprovedFurnitureModel:
             ]
         )
 
-        # Learning rate más alto inicialmente
+        # Set learning rate
         initial_learning_rate = 1e-4
 
-        # Crear métrica top-3 personalizada si no existe
+        # Create top-3 metric if available
         try:
-            # Intentar usar la métrica estándar
             top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
             metrics = ["accuracy", top3_metric]
         except AttributeError:
-            # Si no existe, usar solo accuracy
             metrics = ["accuracy"]
 
         model.compile(
@@ -297,108 +271,31 @@ class ImprovedFurnitureModel:
         self.model = model
         return model
 
-    def train_with_progressive_learning(self, train_generator, val_generator, epochs=100):
-        """Entrenamiento progresivo con diferentes fases"""
+    def train_model(self, train_generator, val_generator, epochs=80):
+        """Train model with single fine-tuning approach"""
+        print("Starting model training...")
 
-        # Fase 1: Entrenamiento con capas congeladas (warm-up)
-        print("=== PHASE 1: Warm-up (base layers frozen) ===")
-
-        # Congelar todas las capas del modelo base
-        for layer in self.model.layers[0].layers:
-            layer.trainable = False
-
-        # Recompilar con learning rate más alto
-        try:
-            top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
-            metrics = ["accuracy", top3_metric]
-        except AttributeError:
-            metrics = ["accuracy"]
-
-        self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
-            loss="categorical_crossentropy",
-            metrics=metrics,
-        )
-
-        callbacks_phase1 = [
+        # Setup callbacks
+        callbacks = [
             EarlyStopping(
-                monitor="val_accuracy", patience=10, restore_best_weights=True, min_delta=0.001
-            ),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-7, verbose=1),
-        ]
-
-        # Entrenar primera fase
-        history1 = self.model.fit(
-            train_generator,
-            epochs=min(30, epochs // 3),
-            validation_data=val_generator,
-            callbacks=callbacks_phase1,
-            verbose=1,
-        )
-
-        # Phase 2: Complete fine-tuning
-        print("\n=== PHASE 2: Complete fine-tuning ===")
-
-        # Gradually unfreeze layers
-        for layer in self.model.layers[0].layers[-50:]:  # Last 50 layers
-            layer.trainable = True
-
-        # Recompile with lower learning rate
-        try:
-            top3_metric = tf.keras.metrics.TopKCategoricalAccuracy(k=3, name="top_3_accuracy")
-            metrics = ["accuracy", top3_metric]
-        except AttributeError:
-            metrics = ["accuracy"]
-
-        self.model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
-            loss="categorical_crossentropy",
-            metrics=metrics,
-        )
-
-        callbacks_phase2 = [
-            EarlyStopping(
-                monitor="val_accuracy", patience=20, restore_best_weights=True, min_delta=0.0005
-            ),
-            ModelCheckpoint(
-                "Models/best_furniture_model.h5",
-                monitor="val_accuracy",
-                save_best_only=True,
-                verbose=1,
+                monitor="val_accuracy", patience=15, restore_best_weights=True, min_delta=0.001
             ),
             ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=8, min_lr=1e-8, verbose=1),
         ]
 
-        # Train second phase
-        remaining_epochs = epochs - len(history1.history["loss"])
-        history2 = self.model.fit(
+        # Train the model
+        history = self.model.fit(
             train_generator,
-            epochs=remaining_epochs,
+            epochs=epochs,
             validation_data=val_generator,
-            callbacks=callbacks_phase2,
+            callbacks=callbacks,
             verbose=1,
         )
 
-        # Combine histories
-        combined_history = self.combine_histories(history1, history2)
-
-        return combined_history
-
-    def combine_histories(self, hist1, hist2):
-        """Combine two training histories"""
-        combined = {}
-        for key in hist1.history.keys():
-            combined[key] = hist1.history[key] + hist2.history[key]
-
-        # Create History-like object
-        class CombinedHistory:
-            def __init__(self, history_dict):
-                self.history = history_dict
-
-        return CombinedHistory(combined)
+        return history
 
     def evaluate_model_performance(self, history):
-        """Detailed performance analysis"""
+        """Analyze model performance in detail"""
         final_train_acc = history.history["accuracy"][-1]
         final_val_acc = history.history["val_accuracy"][-1]
         best_val_acc = max(history.history["val_accuracy"])
@@ -429,12 +326,12 @@ class ImprovedFurnitureModel:
 
         print(f"{'='*50}")
 
-    def plot_comprehensive_training_history(self, history):
-        """Complete training visualization"""
+    def plot_training_history(self, history):
+        """Plot comprehensive training history"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         fig.suptitle("Complete Training Analysis", fontsize=16, fontweight="bold")
 
-        # Accuracy
+        # Accuracy plot
         axes[0, 0].plot(history.history["accuracy"], label="Training", linewidth=2, color="blue")
         axes[0, 0].plot(
             history.history["val_accuracy"], label="Validation", linewidth=2, color="red"
@@ -445,7 +342,7 @@ class ImprovedFurnitureModel:
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
 
-        # Loss
+        # Loss plot
         axes[0, 1].plot(history.history["loss"], label="Training", linewidth=2, color="blue")
         axes[0, 1].plot(history.history["val_loss"], label="Validation", linewidth=2, color="red")
         axes[0, 1].set_title("Model Loss")
@@ -454,7 +351,7 @@ class ImprovedFurnitureModel:
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
 
-        # Top-3 Accuracy (if available)
+        # Top-3 accuracy if available
         if "val_top_3_accuracy" in history.history:
             axes[0, 2].plot(
                 history.history["top_3_accuracy"],
@@ -474,7 +371,7 @@ class ImprovedFurnitureModel:
             axes[0, 2].legend()
             axes[0, 2].grid(True, alpha=0.3)
 
-        # Learning Rate
+        # Learning rate plot
         if "lr" in history.history:
             axes[1, 0].plot(history.history["lr"], linewidth=2, color="purple")
             axes[1, 0].set_title("Learning Rate")
@@ -483,7 +380,7 @@ class ImprovedFurnitureModel:
             axes[1, 0].set_yscale("log")
             axes[1, 0].grid(True, alpha=0.3)
 
-        # Overfitting Analysis
+        # Overfitting analysis
         train_acc = np.array(history.history["accuracy"])
         val_acc = np.array(history.history["val_accuracy"])
         gap = train_acc - val_acc
@@ -502,7 +399,7 @@ class ImprovedFurnitureModel:
         )
         axes[1, 1].legend()
 
-        # Smoothed metrics
+        # Smoothed validation accuracy
         window = min(10, len(history.history["val_accuracy"]) // 4)
         if window > 1:
             val_acc_smooth = np.convolve(
@@ -531,8 +428,8 @@ class ImprovedFurnitureModel:
         plt.tight_layout()
         plt.show()
 
-    def predict_with_confidence_analysis(self, image_path, threshold=0.7):
-        """Enhanced prediction with confidence analysis"""
+    def predict_with_confidence(self, image_path, threshold=0.7):
+        """Make predictions with confidence analysis"""
         if self.model is None:
             return None
 
@@ -546,7 +443,7 @@ class ImprovedFurnitureModel:
         predicted_class = np.argmax(predictions[0])
         confidence = np.max(predictions[0])
 
-        # Top 5 predictions
+        # Get top 5 predictions
         top_5_indices = np.argsort(predictions[0])[-5:][::-1]
         top_5_predictions = [(i, predictions[0][i]) for i in top_5_indices]
 
@@ -567,19 +464,18 @@ class ImprovedFurnitureModel:
                 }
                 for i, conf in top_5_predictions
             ],
-            "entropy": float(
-                -np.sum(predictions[0] * np.log(predictions[0] + 1e-8))
-            ),  # Uncertainty measure
+            "entropy": float(-np.sum(predictions[0] * np.log(predictions[0] + 1e-8))),
         }
 
         return result
 
-    def save_model(self, filepath="Models/improved_furniture_model.h5"):
+    def save_model(self, filepath="Models/furniture_model_final.h5"):
+        """Save the final trained model with metadata"""
         if self.model:
             os.makedirs("Models", exist_ok=True)
             self.model.save(filepath)
 
-            # Saving metadata
+            # Save metadata
             metadata = {
                 "class_names": self.class_names,
                 "img_size": self.img_size,
@@ -590,12 +486,13 @@ class ImprovedFurnitureModel:
             with open(filepath.replace(".h5", "_metadata.json"), "w") as f:
                 json.dump(metadata, f, indent=2)
 
-            print(f"Model and metadata saved to: {filepath}")
+            print(f"Final model and metadata saved to: {filepath}")
 
-    def load_model(self, filepath="Models/improved_furniture_model.h5"):
+    def load_model(self, filepath="Models/furniture_model_final.h5"):
+        """Load a previously trained model"""
         self.model = tf.keras.models.load_model(filepath)
 
-        # Loading metadata
+        # Load metadata
         metadata_path = filepath.replace(".h5", "_metadata.json")
         try:
             with open(metadata_path, "r") as f:
@@ -608,47 +505,38 @@ class ImprovedFurnitureModel:
 
 
 def main():
+    """Main training pipeline"""
+    # Initialize model
+    furniture_model = ImprovedFurnitureModel(img_size=(224, 224), batch_size=16)
 
-    # Configuration
-    furniture_model = ImprovedFurnitureModel(
-        img_size=(224, 224), batch_size=16  # Bigger batch size
-    )
-
-    # Downloading the dataset
+    # Download and prepare dataset
     gdrive_file_id = "1i3cNtxQ0xZTn2-ytDYMLpmYEgBGSI3UP"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
 
-    print(f"{len(train_data[0])} training, {len(val_data[0])} validation")
+    print(f"Dataset prepared: {len(train_data[0])} training, {len(val_data[0])} validation samples")
 
-    # Crear generadores con data augmentation
-    train_generator, val_generator = furniture_model.create_data_generators_with_augmentation(
-        train_data, val_data
-    )
+    # Create data generators (no augmentation since dataset already includes it)
+    train_generator, val_generator = furniture_model.create_data_generators(train_data, val_data)
 
-    # Construir modelo mejorado
-    model = furniture_model.build_improved_model(num_classes=len(furniture_model.class_names))
-    print(f"Model´s parameters: {model.count_params():,}")
+    # Build model
+    model = furniture_model.build_model(num_classes=len(furniture_model.class_names))
+    print(f"Model parameters: {model.count_params():,}")
     print(f"Number of classes: {len(furniture_model.class_names)}")
 
-    # Entrenamiento progresivo
-    history = furniture_model.train_with_progressive_learning(
-        train_generator, val_generator, epochs=80
-    )
+    # Train model with single approach
+    history = furniture_model.train_model(train_generator, val_generator, epochs=80)
 
-    # Análisis y visualización
-    furniture_model.plot_comprehensive_training_history(history)
+    # Analyze and visualize results
+    furniture_model.plot_training_history(history)
     furniture_model.evaluate_model_performance(history)
 
-    # Guardar modelo
-    furniture_model.save_model("Models/improved_furniture_model.h5")
-
-    # Limpiar dataset para ahorrar espacio
-    import shutil
+    # Save final model
+    furniture_model.save_model("Models/furniture_model_final.h5")
 
     if os.path.exists("dataset/"):
         shutil.rmtree("dataset/")
-        print("Temporal dataset cleaned")
+        print("Temporary dataset cleaned up")
 
 
 if __name__ == "__main__":
