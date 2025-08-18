@@ -17,8 +17,10 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.regularizers import l2
 
 
-class OptimizedFurnitureModel:
-    def __init__(self, img_size=(1024, 1024), batch_size=8):
+class ImprovedFurnitureModel:
+    def __init__(
+        self, img_size=(224, 224), batch_size=16
+    ):  # Tamaño más estándar y batch size mayor
         self.img_size = img_size
         self.batch_size = batch_size
         self.label_encoder = LabelEncoder()
@@ -47,51 +49,16 @@ class OptimizedFurnitureModel:
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
-            # temp_zip_path is automatically deleted when temp_dir context exits
-
         return extract_path
 
-    def stream_remote_dataset(self, gdrive_file_id, chunk_size=8192):
-        """Stream and process dataset without storing locally"""
-        import tempfile
-        from io import BytesIO
-
-        import requests
-
-        # Direct download URL for Google Drive
-        url = f"https://drive.google.com/uc?export=download&id={gdrive_file_id}"
-
-        print("Streaming dataset from remote source...")
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            # Stream download
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-
-            # Process zip in memory
-            zip_content = BytesIO()
-            for chunk in response.iter_content(chunk_size=chunk_size):
-                if chunk:
-                    zip_content.write(chunk)
-
-            zip_content.seek(0)
-
-            # Extract to temporary location
-            extract_path = os.path.join(temp_dir, "dataset")
-            with zipfile.ZipFile(zip_content, "r") as zip_ref:
-                zip_ref.extractall(extract_path)
-
-            # Parse annotations immediately
-            train_data, val_data = self.parse_yolo_annotations(extract_path)
-
-        return train_data, val_data
-
     def parse_yolo_annotations(self, dataset_path):
+        """Mejorada para manejar mejor las anotaciones YOLO"""
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
                 data_config = yaml.safe_load(f)
                 self.class_names = data_config.get("names", [])
+                print(f"Clases encontradas: {self.class_names}")
 
         train_images = []
         train_labels = []
@@ -103,6 +70,7 @@ class OptimizedFurnitureModel:
             labels_dir = os.path.join(dataset_path, split, "labels")
 
             if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
+                print(f"Directorio {split} no encontrado")
                 continue
 
             for img_file in os.listdir(images_dir):
@@ -115,20 +83,40 @@ class OptimizedFurnitureModel:
                         with open(label_path, "r") as f:
                             lines = f.readlines()
                             if lines:
+                                # Tomar solo la primera línea (primera detección)
                                 class_id = int(lines[0].split()[0])
-                                if split == "train":
-                                    train_images.append(img_path)
-                                    train_labels.append(class_id)
-                                else:
-                                    val_images.append(img_path)
-                                    val_labels.append(class_id)
+
+                                # Verificar que el class_id sea válido
+                                if 0 <= class_id < len(self.class_names):
+                                    if split == "train":
+                                        train_images.append(img_path)
+                                        train_labels.append(class_id)
+                                    else:
+                                        val_images.append(img_path)
+                                        val_labels.append(class_id)
 
         print(f"Training: {len(train_images)}, Validation: {len(val_images)}")
+        print(f"Distribución de clases en entrenamiento:")
+
+        # Mostrar distribución de clases
+        unique, counts = np.unique(train_labels, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {count} imágenes")
+
         return (train_images, train_labels), (val_images, val_labels)
 
     def load_and_preprocess_image(self, image_path):
+        """Preprocesamiento mejorado de imágenes"""
         try:
             image = cv2.imread(image_path)
+            if image is None:
+                return None
+
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             image = cv2.resize(image, self.img_size)
             image = image.astype("float32") / 255.0
@@ -137,223 +125,379 @@ class OptimizedFurnitureModel:
             print(f"Error loading image {image_path}: {e}")
             return None
 
-    def create_memory_efficient_generators(self, train_data, val_data):
-        """Create memory-efficient data generators that load images on-demand"""
+    def create_data_generators_with_augmentation(self, train_data, val_data):
+        """Generadores de datos con data augmentation"""
         train_images, train_labels = train_data
         val_images, val_labels = val_data
 
-        # Convert labels to categorical format
-        y_train_cat = tf.keras.utils.to_categorical(train_labels, num_classes=len(self.class_names))
-        y_val_cat = tf.keras.utils.to_categorical(val_labels, num_classes=len(self.class_names))
+        # Convertir labels a categórico
+        num_classes = len(self.class_names)
+        y_train_cat = tf.keras.utils.to_categorical(train_labels, num_classes=num_classes)
+        y_val_cat = tf.keras.utils.to_categorical(val_labels, num_classes=num_classes)
 
-        # Custom generator class for memory efficiency
-        class MemoryEfficientSequence(tf.keras.utils.Sequence):
-            def __init__(self, image_paths, labels, batch_size, img_size, shuffle=True):
+        # Data augmentation para entrenamiento
+        train_datagen = ImageDataGenerator(
+            rotation_range=20,
+            width_shift_range=0.1,
+            height_shift_range=0.1,
+            horizontal_flip=True,
+            zoom_range=0.1,
+            fill_mode="nearest",
+            brightness_range=[0.8, 1.2],
+            shear_range=0.1,
+        )
+
+        # Sin augmentation para validación
+        val_datagen = ImageDataGenerator()
+
+        class ImprovedSequence(tf.keras.utils.Sequence):
+            def __init__(
+                self, image_paths, labels, batch_size, img_size, datagen=None, shuffle=True
+            ):
                 self.image_paths = image_paths
                 self.labels = labels
                 self.batch_size = batch_size
                 self.img_size = img_size
+                self.datagen = datagen
                 self.shuffle = shuffle
                 self.indices = np.arange(len(self.image_paths))
                 self.on_epoch_end()
 
             def __len__(self):
-                return len(self.image_paths) // self.batch_size
+                return max(1, len(self.image_paths) // self.batch_size)
 
             def __getitem__(self, index):
                 batch_indices = self.indices[
                     index * self.batch_size : (index + 1) * self.batch_size
                 ]
-                batch_paths = [self.image_paths[i] for i in batch_indices]
-                batch_labels = self.labels[batch_indices]
 
-                # Load images on-demand
                 batch_images = []
-                valid_labels = []
+                batch_labels = []
 
-                for img_path, label in zip(batch_paths, batch_labels):
-                    try:
-                        image = cv2.imread(img_path)
-                        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                        image = cv2.resize(image, self.img_size)
-                        image = image.astype("float32") / 255.0
-                        batch_images.append(image)
-                        valid_labels.append(label)
-                    except Exception:
-                        continue
+                for idx in batch_indices:
+                    if idx < len(self.image_paths):
+                        img_path = self.image_paths[idx]
+                        label = self.labels[idx]
 
-                if batch_images:
-                    return np.array(batch_images), np.array(valid_labels)
-                else:
-                    # Return empty batch if all images failed to load
-                    empty_batch = np.zeros((1, *self.img_size, 3))
-                    empty_labels = np.zeros((1, len(self.labels[0])))
-                    return empty_batch, empty_labels
+                        image = self.load_and_preprocess_image_batch(img_path)
+                        if image is not None:
+                            # Aplicar data augmentation si está disponible
+                            if self.datagen is not None:
+                                image = image.reshape((1,) + image.shape)
+                                image = self.datagen.flow(image, batch_size=1)[0][0]
+
+                            batch_images.append(image)
+                            batch_labels.append(label)
+
+                # Asegurar que tenemos al menos una imagen
+                if not batch_images:
+                    # Crear batch vacío válido
+                    batch_images = [np.zeros((*self.img_size, 3))]
+                    batch_labels = [
+                        np.zeros(len(self.labels[0]) if len(self.labels) > 0 else num_classes)
+                    ]
+
+                return np.array(batch_images), np.array(batch_labels)
+
+            def load_and_preprocess_image_batch(self, image_path):
+                try:
+                    image = cv2.imread(image_path)
+                    if image is None:
+                        return None
+                    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    image = cv2.resize(image, self.img_size)
+                    image = image.astype("float32") / 255.0
+                    return image
+                except Exception:
+                    return None
 
             def on_epoch_end(self):
                 if self.shuffle:
                     np.random.shuffle(self.indices)
 
-        train_generator = MemoryEfficientSequence(
-            train_images, y_train_cat, self.batch_size, self.img_size, shuffle=True
+        train_generator = ImprovedSequence(
+            train_images,
+            y_train_cat,
+            self.batch_size,
+            self.img_size,
+            datagen=train_datagen,
+            shuffle=True,
         )
-        val_generator = MemoryEfficientSequence(
-            val_images, y_val_cat, self.batch_size, self.img_size, shuffle=False
+        val_generator = ImprovedSequence(
+            val_images, y_val_cat, self.batch_size, self.img_size, datagen=None, shuffle=False
         )
 
         return train_generator, val_generator
 
-    def build_model(self, num_classes):
-        """Optimized architecture for small datasets with high regularization"""
-        base_model = tf.keras.applications.MobileNetV2(
+    def build_improved_model(self, num_classes):
+        """Arquitectura mejorada y más balanceada"""
+        # Usar EfficientNetB0 que es más moderno y eficiente
+        base_model = tf.keras.applications.EfficientNetB0(
             input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
         )
 
-        # More aggressive layer freezing for small dataset
+        # Estrategia de fine-tuning más inteligente
         base_model.trainable = True
-        for layer in base_model.layers[:-20]:  # Only unfreeze last 20 layers
+
+        # Congelar las primeras capas, descongelar las últimas
+        fine_tune_at = len(base_model.layers) - 30
+        for layer in base_model.layers[:fine_tune_at]:
             layer.trainable = False
 
+        # Arquitectura más balanceada
         model = models.Sequential(
             [
                 base_model,
                 layers.GlobalAveragePooling2D(),
-                layers.Dropout(0.8),  # Very high dropout for small dataset
-                layers.Dense(
-                    128, activation="relu", kernel_regularizer=l2(0.03)
-                ),  # Strong L2 regularization
                 layers.BatchNormalization(),
-                layers.Dropout(0.7),
-                layers.Dense(64, activation="relu", kernel_regularizer=l2(0.03)),
+                layers.Dropout(0.3),  # Dropout más moderado
+                layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001)),
                 layers.BatchNormalization(),
-                layers.Dropout(0.6),
+                layers.Dropout(0.4),
+                layers.Dense(128, activation="relu", kernel_regularizer=l2(0.001)),
+                layers.BatchNormalization(),
+                layers.Dropout(0.3),
                 layers.Dense(num_classes, activation="softmax"),
             ]
         )
 
-        # Very low learning rate for stability with small dataset
+        # Learning rate más alto inicialmente
+        initial_learning_rate = 1e-4
         model.compile(
-            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
             loss="categorical_crossentropy",
-            metrics=["accuracy"],
+            metrics=["accuracy", "top_3_accuracy"],
         )
 
         self.model = model
         return model
 
-    def train_model(self, train_generator, val_generator, epochs=200):
-        """Training with extended patience and conservative approach"""
-        callbacks = [
+    def train_with_progressive_learning(self, train_generator, val_generator, epochs=100):
+        """Entrenamiento progresivo con diferentes fases"""
+
+        # Fase 1: Entrenamiento con capas congeladas (warm-up)
+        print("=== FASE 1: Warm-up (capas base congeladas) ===")
+
+        # Congelar todas las capas del modelo base
+        for layer in self.model.layers[0].layers:
+            layer.trainable = False
+
+        # Recompilar con learning rate más alto
+        self.model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+            loss="categorical_crossentropy",
+            metrics=["accuracy", "top_3_accuracy"],
+        )
+
+        callbacks_phase1 = [
             EarlyStopping(
-                monitor="val_loss",
-                patience=30,  # Extended patience
-                restore_best_weights=True,
-                min_delta=0.001,
+                monitor="val_accuracy", patience=10, restore_best_weights=True, min_delta=0.001
             ),
-            ModelCheckpoint(
-                "Models/best_furniture_model.h5", monitor="val_accuracy", save_best_only=True
-            ),
-            ReduceLROnPlateau(
-                monitor="val_loss",
-                factor=0.3,  # More aggressive reduction
-                patience=15,
-                min_lr=1e-8,
-                cooldown=5,
-            ),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.5, patience=5, min_lr=1e-7, verbose=1),
         ]
 
-        steps_per_epoch = len(train_generator)
-        validation_steps = len(val_generator)
-
-        history = self.model.fit(
+        # Entrenar primera fase
+        history1 = self.model.fit(
             train_generator,
-            steps_per_epoch=steps_per_epoch,
-            epochs=epochs,
+            epochs=min(30, epochs // 3),
             validation_data=val_generator,
-            validation_steps=validation_steps,
-            callbacks=callbacks,
+            callbacks=callbacks_phase1,
             verbose=1,
         )
 
-        return history
+        # Fase 2: Fine-tuning completo
+        print("\n=== FASE 2: Fine-tuning completo ===")
+
+        # Descongelar capas gradualment
+        for layer in self.model.layers[0].layers[-50:]:  # Últimas 50 capas
+            layer.trainable = True
+
+        # Recompilar con learning rate más bajo
+        self.model.compile(
+            optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+            loss="categorical_crossentropy",
+            metrics=["accuracy", "top_3_accuracy"],
+        )
+
+        callbacks_phase2 = [
+            EarlyStopping(
+                monitor="val_accuracy", patience=20, restore_best_weights=True, min_delta=0.0005
+            ),
+            ModelCheckpoint(
+                "Models/best_furniture_model.h5",
+                monitor="val_accuracy",
+                save_best_only=True,
+                verbose=1,
+            ),
+            ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=8, min_lr=1e-8, verbose=1),
+        ]
+
+        # Entrenar segunda fase
+        remaining_epochs = epochs - len(history1.history["loss"])
+        history2 = self.model.fit(
+            train_generator,
+            epochs=remaining_epochs,
+            validation_data=val_generator,
+            callbacks=callbacks_phase2,
+            verbose=1,
+        )
+
+        # Combinar historiales
+        combined_history = self.combine_histories(history1, history2)
+
+        return combined_history
+
+    def combine_histories(self, hist1, hist2):
+        """Combinar dos historiales de entrenamiento"""
+        combined = {}
+        for key in hist1.history.keys():
+            combined[key] = hist1.history[key] + hist2.history[key]
+
+        # Crear objeto tipo History
+        class CombinedHistory:
+            def __init__(self, history_dict):
+                self.history = history_dict
+
+        return CombinedHistory(combined)
 
     def evaluate_model_performance(self, history):
-        """Analyze training performance and overfitting"""
+        """Análisis detallado del rendimiento"""
         final_train_acc = history.history["accuracy"][-1]
         final_val_acc = history.history["val_accuracy"][-1]
         best_val_acc = max(history.history["val_accuracy"])
 
+        # Top-3 accuracy si está disponible
+        final_top3_acc = history.history.get("val_top_3_accuracy", [0])[-1]
+
         gap = final_train_acc - final_val_acc
 
-        print(f"\nTraining Performance Summary:")
-        print(f"Final Training Accuracy: {final_train_acc:.4f}")
-        print(f"Final Validation Accuracy: {final_val_acc:.4f}")
-        print(f"Best Validation Accuracy: {best_val_acc:.4f}")
-        print(f"Overfitting Gap: {gap:.4f}")
+        print(f"\n{'='*50}")
+        print(f"RESUMEN DE RENDIMIENTO DEL MODELO")
+        print(f"{'='*50}")
+        print(f"Accuracy Final Entrenamiento: {final_train_acc:.4f}")
+        print(f"Accuracy Final Validación:    {final_val_acc:.4f}")
+        print(f"Mejor Accuracy Validación:    {best_val_acc:.4f}")
+        print(f"Top-3 Accuracy Validación:    {final_top3_acc:.4f}")
+        print(f"Gap Overfitting:              {gap:.4f}")
+        print(f"{'='*50}")
 
-        if gap > 0.3:
-            print("Status: Severe overfitting detected")
-            print("Recommendation: Increase regularization or collect more data")
-        elif gap > 0.15:
-            print("Status: Moderate overfitting")
-            print("Recommendation: Consider additional regularization")
+        if gap > 0.2:
+            print("❌ ESTADO: Overfitting severo detectado")
+            print("💡 RECOMENDACIÓN: Aumentar regularización o más datos")
+        elif gap > 0.1:
+            print("⚠️  ESTADO: Overfitting moderado")
+            print("💡 RECOMENDACIÓN: Considerar más regularización")
         else:
-            print("Status: Good generalization")
+            print("✅ ESTADO: Buena generalización")
 
-    def plot_training_history(self, history):
-        """Comprehensive training visualization"""
-        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        print(f"{'='*50}")
+
+    def plot_comprehensive_training_history(self, history):
+        """Visualización completa del entrenamiento"""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        fig.suptitle("Análisis Completo del Entrenamiento", fontsize=16, fontweight="bold")
 
         # Accuracy
-        axes[0, 0].plot(history.history["accuracy"], label="Training", linewidth=2)
-        axes[0, 0].plot(history.history["val_accuracy"], label="Validation", linewidth=2)
-        axes[0, 0].set_title("Model Accuracy")
-        axes[0, 0].set_xlabel("Epoch")
+        axes[0, 0].plot(
+            history.history["accuracy"], label="Entrenamiento", linewidth=2, color="blue"
+        )
+        axes[0, 0].plot(
+            history.history["val_accuracy"], label="Validación", linewidth=2, color="red"
+        )
+        axes[0, 0].set_title("Accuracy del Modelo")
+        axes[0, 0].set_xlabel("Época")
         axes[0, 0].set_ylabel("Accuracy")
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
 
         # Loss
-        axes[0, 1].plot(history.history["loss"], label="Training", linewidth=2)
-        axes[0, 1].plot(history.history["val_loss"], label="Validation", linewidth=2)
-        axes[0, 1].set_title("Model Loss")
-        axes[0, 1].set_xlabel("Epoch")
+        axes[0, 1].plot(history.history["loss"], label="Entrenamiento", linewidth=2, color="blue")
+        axes[0, 1].plot(history.history["val_loss"], label="Validación", linewidth=2, color="red")
+        axes[0, 1].set_title("Loss del Modelo")
+        axes[0, 1].set_xlabel("Época")
         axes[0, 1].set_ylabel("Loss")
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
 
+        # Top-3 Accuracy (si está disponible)
+        if "val_top_3_accuracy" in history.history:
+            axes[0, 2].plot(
+                history.history["top_3_accuracy"],
+                label="Top-3 Entrenamiento",
+                linewidth=2,
+                color="green",
+            )
+            axes[0, 2].plot(
+                history.history["val_top_3_accuracy"],
+                label="Top-3 Validación",
+                linewidth=2,
+                color="orange",
+            )
+            axes[0, 2].set_title("Top-3 Accuracy")
+            axes[0, 2].set_xlabel("Época")
+            axes[0, 2].set_ylabel("Top-3 Accuracy")
+            axes[0, 2].legend()
+            axes[0, 2].grid(True, alpha=0.3)
+
         # Learning Rate
         if "lr" in history.history:
-            axes[1, 0].plot(history.history["lr"], linewidth=2)
+            axes[1, 0].plot(history.history["lr"], linewidth=2, color="purple")
             axes[1, 0].set_title("Learning Rate")
-            axes[1, 0].set_xlabel("Epoch")
+            axes[1, 0].set_xlabel("Época")
             axes[1, 0].set_ylabel("Learning Rate")
             axes[1, 0].set_yscale("log")
             axes[1, 0].grid(True, alpha=0.3)
 
-        # Overfitting analysis
+        # Análisis de Overfitting
         train_acc = np.array(history.history["accuracy"])
         val_acc = np.array(history.history["val_accuracy"])
         gap = train_acc - val_acc
 
         axes[1, 1].plot(gap, linewidth=2, color="red")
-        axes[1, 1].set_title("Overfitting Gap (Train - Val Accuracy)")
-        axes[1, 1].set_xlabel("Epoch")
-        axes[1, 1].set_ylabel("Accuracy Gap")
+        axes[1, 1].set_title("Gap de Overfitting (Train - Val)")
+        axes[1, 1].set_xlabel("Época")
+        axes[1, 1].set_ylabel("Diferencia de Accuracy")
         axes[1, 1].grid(True, alpha=0.3)
+        axes[1, 1].axhline(y=0.05, color="yellow", linestyle="--", alpha=0.7, label="Límite Ideal")
         axes[1, 1].axhline(
-            y=0.1, color="orange", linestyle="--", alpha=0.7, label="Mild Overfitting"
+            y=0.1, color="orange", linestyle="--", alpha=0.7, label="Overfitting Leve"
         )
         axes[1, 1].axhline(
-            y=0.2, color="red", linestyle="--", alpha=0.7, label="Severe Overfitting"
+            y=0.2, color="red", linestyle="--", alpha=0.7, label="Overfitting Severo"
         )
         axes[1, 1].legend()
+
+        # Suavizado de métricas
+        window = min(10, len(history.history["val_accuracy"]) // 4)
+        if window > 1:
+            val_acc_smooth = np.convolve(
+                history.history["val_accuracy"], np.ones(window) / window, mode="valid"
+            )
+            axes[1, 2].plot(
+                range(window - 1, len(history.history["val_accuracy"])),
+                val_acc_smooth,
+                label=f"Val Accuracy (suavizado {window})",
+                linewidth=2,
+                color="red",
+            )
+            axes[1, 2].plot(
+                history.history["val_accuracy"],
+                label="Val Accuracy (original)",
+                linewidth=1,
+                alpha=0.5,
+                color="lightcoral",
+            )
+            axes[1, 2].set_title("Accuracy Validación Suavizada")
+            axes[1, 2].set_xlabel("Época")
+            axes[1, 2].set_ylabel("Accuracy")
+            axes[1, 2].legend()
+            axes[1, 2].grid(True, alpha=0.3)
 
         plt.tight_layout()
         plt.show()
 
     def predict_with_confidence_analysis(self, image_path, threshold=0.7):
-        """Enhanced prediction with confidence analysis"""
+        """Predicción mejorada con análisis de confianza"""
         if self.model is None:
             return None
 
@@ -367,84 +511,120 @@ class OptimizedFurnitureModel:
         predicted_class = np.argmax(predictions[0])
         confidence = np.max(predictions[0])
 
-        # Get top 3 predictions
-        top_3_indices = np.argsort(predictions[0])[-3:][::-1]
-        top_3_predictions = [(i, predictions[0][i]) for i in top_3_indices]
+        # Top 5 predicciones
+        top_5_indices = np.argsort(predictions[0])[-5:][::-1]
+        top_5_predictions = [(i, predictions[0][i]) for i in top_5_indices]
 
         result = {
             "predicted_class": (
                 self.class_names[predicted_class]
-                if self.class_names
+                if predicted_class < len(self.class_names)
                 else f"Class_{predicted_class}"
             ),
             "confidence": float(confidence),
             "class_id": int(predicted_class),
             "is_confident": confidence > threshold,
-            "top_3_predictions": [
+            "top_5_predictions": [
                 {
-                    "class": self.class_names[i] if self.class_names else f"Class_{i}",
+                    "class": self.class_names[i] if i < len(self.class_names) else f"Class_{i}",
                     "confidence": float(conf),
                     "class_id": int(i),
                 }
-                for i, conf in top_3_predictions
+                for i, conf in top_5_predictions
             ],
+            "entropy": float(
+                -np.sum(predictions[0] * np.log(predictions[0] + 1e-8))
+            ),  # Medida de incertidumbre
         }
 
         return result
 
-    def predict(self, image_path):
-        """Standard prediction method for compatibility"""
-        result = self.predict_with_confidence_analysis(image_path)
-        if result:
-            return {
-                "class": result["predicted_class"],
-                "confidence": result["confidence"],
-                "class_id": result["class_id"],
-            }
-        return None
-
-    def save_model(self, filepath="Models/optimized_furniture_model.h5"):
+    def save_model(self, filepath="Models/improved_furniture_model.h5"):
         if self.model:
             os.makedirs("Models", exist_ok=True)
             self.model.save(filepath)
-            with open(filepath.replace(".h5", "_classes.json"), "w") as f:
-                json.dump(self.class_names, f)
 
-    def load_model(self, filepath="Models/optimized_furniture_model.h5"):
+            # Guardar metadatos
+            metadata = {
+                "class_names": self.class_names,
+                "img_size": self.img_size,
+                "num_classes": len(self.class_names),
+                "model_type": "EfficientNetB0",
+            }
+
+            with open(filepath.replace(".h5", "_metadata.json"), "w") as f:
+                json.dump(metadata, f, indent=2)
+
+            print(f"Modelo y metadatos guardados en: {filepath}")
+
+    def load_model(self, filepath="Models/improved_furniture_model.h5"):
         self.model = tf.keras.models.load_model(filepath)
+
+        # Cargar metadatos
+        metadata_path = filepath.replace(".h5", "_metadata.json")
         try:
-            with open(filepath.replace(".h5", "_classes.json"), "r") as f:
-                self.class_names = json.load(f)
+            with open(metadata_path, "r") as f:
+                metadata = json.load(f)
+                self.class_names = metadata.get("class_names", [])
+                self.img_size = tuple(metadata.get("img_size", (224, 224)))
+            print(f"Modelo y metadatos cargados desde: {filepath}")
         except FileNotFoundError:
-            print("Class names file not found")
+            print("Archivo de metadatos no encontrado, usando valores por defecto")
 
 
-if __name__ == "__main__":
-    furniture_model = OptimizedFurnitureModel(img_size=(624, 624), batch_size=4)
+# Función principal mejorada
+def main():
+    print("🚀 Iniciando entrenamiento del modelo mejorado de muebles")
 
-    # Remote download with temporary storage
+    # Configuración optimizada
+    furniture_model = ImprovedFurnitureModel(
+        img_size=(224, 224),  # Tamaño estándar para EfficientNet
+        batch_size=16,  # Batch size más grande
+    )
+
+    # Descargar y procesar dataset
     gdrive_file_id = "1i3cNtxQ0xZTn2-ytDYMLpmYEgBGSI3UP"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
     train_data, val_data = furniture_model.parse_yolo_annotations(dataset_path)
 
-    # Use memory-efficient generators
-    train_generator, val_generator = furniture_model.create_memory_efficient_generators(
+    # Verificar que tenemos datos suficientes
+    if len(train_data[0]) == 0:
+        print("❌ Error: No se encontraron datos de entrenamiento")
+        return
+
+    print(f"✅ Datos cargados: {len(train_data[0])} entrenamiento, {len(val_data[0])} validación")
+
+    # Crear generadores con data augmentation
+    train_generator, val_generator = furniture_model.create_data_generators_with_augmentation(
         train_data, val_data
     )
 
-    model = furniture_model.build_model(num_classes=len(furniture_model.class_names))
-    print(f"Model parameters: {model.count_params():,}")
+    # Construir modelo mejorado
+    model = furniture_model.build_improved_model(num_classes=len(furniture_model.class_names))
+    print(f"📊 Parámetros del modelo: {model.count_params():,}")
+    print(f"📊 Número de clases: {len(furniture_model.class_names)}")
 
-    history = furniture_model.train_model(train_generator, val_generator, epochs=150)
+    # Entrenamiento progresivo
+    history = furniture_model.train_with_progressive_learning(
+        train_generator, val_generator, epochs=80
+    )
 
-    furniture_model.plot_training_history(history)
+    # Análisis y visualización
+    furniture_model.plot_comprehensive_training_history(history)
     furniture_model.evaluate_model_performance(history)
 
-    furniture_model.save_model("Models/optimized_furniture_model.h5")
+    # Guardar modelo
+    furniture_model.save_model("Models/improved_furniture_model.h5")
 
-    # Clean up dataset folder to save space
+    # Limpiar dataset para ahorrar espacio
     import shutil
 
     if os.path.exists("dataset/"):
         shutil.rmtree("dataset/")
-        print("Dataset folder cleaned up to save storage space")
+        print("🧹 Dataset temporal limpiado")
+
+    print("🎉 Entrenamiento completado!")
+
+
+if __name__ == "__main__":
+    main()
