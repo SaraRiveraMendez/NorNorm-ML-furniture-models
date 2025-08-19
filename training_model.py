@@ -248,7 +248,7 @@ class ImprovedFurnitureModelYOLOv12:
             # For now, using EfficientNetB0 as the backbone is more stable
 
         # Build model with EfficientNetB0 backbone
-        base_model = tf.keras.applications.YOLOv12(
+        base_model = tf.keras.applications.EfficientNetB0(
             input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
         )
         base_model.trainable = True
