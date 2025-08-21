@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import tensorflow as tf
+import torch
 import yaml
 from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
@@ -159,10 +160,10 @@ class ImprovedFurnitureModelYOLOv12:
         train_images, train_labels = train_data
         val_images, val_labels = val_data
 
-        # Encode labels to categorical
+        # Labels are already in categorical format from the dataset
         num_classes = len(self.class_names)
-        y_train_cat = tf.keras.utils.to_categorical(train_labels, num_classes)
-        y_val_cat = tf.keras.utils.to_categorical(val_labels, num_classes)
+        y_train_cat = train_labels  # Already categorical
+        y_val_cat = val_labels  # Already categorical
 
         class ImprovedSequence(tf.keras.utils.Sequence):
             def __init__(self, image_paths, labels, batch_size, img_size, shuffle=True):
@@ -199,9 +200,7 @@ class ImprovedFurnitureModelYOLOv12:
                 if not batch_images:
                     # Create valid empty batch
                     batch_images = [np.zeros((*self.img_size, 3))]
-                    batch_labels = [
-                        np.zeros(len(self.labels[0]) if len(self.labels) > 0 else num_classes)
-                    ]
+                    batch_labels = [np.zeros(num_classes)]
 
                 return np.array(batch_images), np.array(batch_labels)
 
@@ -235,7 +234,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         return train_generator, val_generator
 
-    def initialize_yolov12(self, model_size="n"):
+    def initialize_yolov12(self, model_size="x"):
         """Initialize YOLOv12 model"""
         try:
             model_name = f"yolo12{model_size}.pt"
@@ -248,92 +247,181 @@ class ImprovedFurnitureModelYOLOv12:
             return False
 
     def extract_yolo_features(self, image_batch):
-        """Extract features using YOLOv12 backbone"""
+        """Extract features directly from YOLO backbone"""
         if self.yolo_model is None:
             return None
 
-        try:
-            # YOLOv12 feature extraction
-            features_list = []
-            for img in image_batch:
-                # Convert to uint8 format for YOLO
-                img_uint8 = (img * 255).astype(np.uint8)
+        features_list = []
+        for img in image_batch:
+            img_uint8 = (img * 255).astype(np.uint8)
 
-                # Use YOLO for feature extraction (without detection head)
-                results = self.yolo_model.predict(img_uint8, verbose=False, save=False)
+            img_tensor = self.yolo_model.transforms(img_uint8)
+            img_tensor = img_tensor.unsqueeze(0).to(self.yolo_model.device)
 
-                # Extract backbone features - this is a simplified approach
-                # In practice, you'd need to access the backbone directly
-                # For now, we'll use the prediction confidence as features
-                if results and len(results) > 0:
-                    # Create feature vector from detection results
-                    boxes = results[0].boxes
-                    if boxes is not None and len(boxes) > 0:
-                        # Use detection confidences and class probabilities as features
-                        feature_vector = (
-                            np.mean(boxes.conf.cpu().numpy()) if len(boxes.conf) > 0 else 0.0
-                        )
-                        features_list.append([feature_vector] * 256)  # Expand to 256 features
-                    else:
-                        features_list.append(np.zeros(256))
-                else:
-                    features_list.append(np.zeros(256))
+            with torch.no_grad():
+                features = self.yolo_model.model.backbone(img_tensor)
+                last_feature_map = features[-1]  # Último feature map
 
-            return np.array(features_list)
+                # Global Average Pooling
+                pooled = torch.mean(last_feature_map, dim=[2, 3]).squeeze().cpu().numpy()
+                features_list.append(pooled)
 
-        except Exception as e:
-            print(f"Error in YOLO feature extraction: {e}")
-            return None
+        return np.array(features_list)
 
     def build_model(self, num_classes):
-        """Build model with YOLOv12 backbone"""
-        if self.yolo_model is None:
-            print("YOLOv12 not available, using EfficientNetB0 as backbone")
-            # Fallback to EfficientNetB0
-            base_model = tf.keras.applications.EfficientNetB0(
-                input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
-            )
+        """Build model with REAL YOLOv12 integration"""
+
+        # INPUT LAYER
+        input_layer = tf.keras.layers.Input(shape=(*self.img_size, 3))
+
+        # YOLO BACKBONE INTEGRATION
+        if self.yolo_model is not None:
+            print("Building model with YOLOv12 backbone integration")
+
+            # Custom layer for YOLO feature extraction
+            class YOLOFeatureExtractor(tf.keras.layers.Layer):
+                def __init__(self, yolo_model, feature_dim=2048, **kwargs):
+                    super(YOLOFeatureExtractor, self).__init__(**kwargs)
+                    self.yolo_model = yolo_model
+                    self.feature_dim = feature_dim
+
+                def build(self, input_shape):
+                    super(YOLOFeatureExtractor, self).build(input_shape)
+
+                def call(self, inputs):
+                    # This will be called during training/inference
+                    batch_size = tf.shape(inputs)[0]
+
+                    # Convert normalized inputs back to 0-255 range for YOLO
+                    inputs_uint8 = tf.cast(inputs * 255.0, tf.uint8)
+
+                    # Process each image in the batch
+                    def extract_features_single(img):
+                        # Convert tensor to numpy for YOLO processing
+                        img_np = img.numpy()
+
+                        try:
+                            # Run YOLO inference
+                            results = self.yolo_model(img_np, verbose=False)
+
+                            # Extract features from YOLO backbone
+                            # Access the model's backbone directly
+                            with torch.no_grad():
+                                # Prepare image tensor for YOLO backbone
+                                img_tensor = (
+                                    torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float()
+                                    / 255.0
+                                )
+                                img_tensor = img_tensor.to(self.yolo_model.device)
+
+                                # Extract features from backbone
+                                features = self.yolo_model.model.backbone(img_tensor)
+
+                                # Get the last feature map and apply global average pooling
+                                last_feature_map = features[-1]  # Shape: [1, channels, h, w]
+                                pooled_features = torch.mean(
+                                    last_feature_map, dim=[2, 3]
+                                ).squeeze()  # Global avg pooling
+
+                                # Convert back to numpy and ensure consistent size
+                                feature_vector = pooled_features.cpu().numpy()
+
+                                # Pad or truncate to consistent size
+                                if len(feature_vector) < self.feature_dim:
+                                    feature_vector = np.pad(
+                                        feature_vector, (0, self.feature_dim - len(feature_vector))
+                                    )
+                                elif len(feature_vector) > self.feature_dim:
+                                    feature_vector = feature_vector[: self.feature_dim]
+
+                        except Exception as e:
+                            print(f"Error in YOLO feature extraction: {e}")
+                            # Fallback to zero features
+                            feature_vector = np.zeros(self.feature_dim)
+
+                        return feature_vector.astype(np.float32)
+
+                    # Apply feature extraction to each image in batch
+                    features_list = tf.py_function(
+                        func=lambda batch: tf.stack(
+                            [
+                                tf.py_function(extract_features_single, [batch[i]], tf.float32)
+                                for i in range(batch_size)
+                            ]
+                        ),
+                        inp=[inputs_uint8],
+                        Tout=tf.float32,
+                    )
+
+                    # Ensure proper shape
+                    features_list.set_shape([None, self.feature_dim])
+
+                    return features_list
+
+                def get_config(self):
+                    config = super(YOLOFeatureExtractor, self).get_config()
+                    config.update({"feature_dim": self.feature_dim})
+                    return config
+
+            # Extract YOLO features
+            yolo_features = YOLOFeatureExtractor(self.yolo_model, feature_dim=2048)(input_layer)
+
+            # Build classification head on top of YOLO features
+            x = layers.Dense(1024, activation="relu", kernel_regularizer=l2(0.001))(yolo_features)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dropout(0.4)(x)
+
+            x = layers.Dense(512, activation="relu", kernel_regularizer=l2(0.001))(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dropout(0.3)(x)
+
+            x = layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001))(x)
+            x = layers.BatchNormalization()(x)
+            x = layers.Dropout(0.2)(x)
+
+            # Output layer
+            outputs = layers.Dense(num_classes, activation="softmax")(x)
+
+            # Create model
+            model = tf.keras.Model(inputs=input_layer, outputs=outputs)
+
         else:
-            print("Building custom model with YOLOv12 feature integration")
-            # Create a custom input layer
-            input_layer = layers.Input(shape=(*self.img_size, 3))
+            print("Building model with EfficientNetB0 backbone (YOLO not available)")
 
-            # Use EfficientNetB0 as the main backbone (since direct YOLOv12 integration is complex)
-            # but we'll incorporate YOLO features in the training process
+            # Fallback to EfficientNetB0 if YOLO is not available
             base_model = tf.keras.applications.EfficientNetB0(
-                input_shape=(*self.img_size, 3), include_top=False, weights="imagenet"
+                weights="imagenet", include_top=False, input_tensor=input_layer
             )
 
-        base_model.trainable = True
+            base_model.trainable = True
 
-        # Freeze most layers initially, keep only last 30 trainable
-        fine_tune_at = len(base_model.layers) - 30
-        for layer in base_model.layers[:fine_tune_at]:
-            layer.trainable = False
+            # Freeze most layers initially, keep only last 30 trainable
+            fine_tune_at = len(base_model.layers) - 30
+            for layer in base_model.layers[:fine_tune_at]:
+                layer.trainable = False
 
-        # Complete architecture with YOLOv12-inspired improvements
-        model = models.Sequential(
-            [
-                base_model,
-                layers.GlobalAveragePooling2D(),
-                layers.BatchNormalization(),
-                layers.Dropout(0.3),
-                # Additional layer inspired by YOLO architecture
-                layers.Dense(512, activation="relu", kernel_regularizer=l2(0.001)),
-                layers.BatchNormalization(),
-                layers.Dropout(0.4),
-                layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001)),
-                layers.BatchNormalization(),
-                layers.Dropout(0.3),
-                layers.Dense(128, activation="relu", kernel_regularizer=l2(0.001)),
-                layers.BatchNormalization(),
-                layers.Dropout(0.2),
-                layers.Dense(num_classes, activation="softmax"),
-            ]
-        )
+            # Complete architecture
+            model = models.Sequential(
+                [
+                    base_model,
+                    layers.GlobalAveragePooling2D(),
+                    layers.BatchNormalization(),
+                    layers.Dropout(0.3),
+                    layers.Dense(512, activation="relu", kernel_regularizer=l2(0.001)),
+                    layers.BatchNormalization(),
+                    layers.Dropout(0.4),
+                    layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001)),
+                    layers.BatchNormalization(),
+                    layers.Dropout(0.3),
+                    layers.Dense(128, activation="relu", kernel_regularizer=l2(0.001)),
+                    layers.BatchNormalization(),
+                    layers.Dropout(0.2),
+                    layers.Dense(num_classes, activation="softmax"),
+                ]
+            )
 
         # Initial learning rate optimized for YOLO-style training
-        initial_learning_rate = 5e-5
+        initial_learning_rate = 5e-5 if self.yolo_model is not None else 1e-4
 
         # Custom metrics
         class Top1Accuracy(tf.keras.metrics.Metric):
@@ -371,7 +459,9 @@ class ImprovedFurnitureModelYOLOv12:
         )
 
         self.model = model
-        self.base_model = base_model
+        if self.yolo_model is None and "base_model" in locals():
+            self.base_model = base_model
+
         return model
 
     def train_model(self, train_generator, val_generator, epochs=80):
@@ -728,10 +818,10 @@ def main():
     furniture_model = ImprovedFurnitureModelYOLOv12(img_size=(640, 640), batch_size=16)
 
     # Initialize YOLOv12
-    furniture_model.initialize_yolov12(model_size="n")  # Options: 'n', 's', 'm', 'l', 'x'
+    furniture_model.initialize_yolov12(model_size="x")
 
     # Download and prepare dataset
-    gdrive_file_id = "1i3cNtxQ0xZTn2-ytDYMLpmYEgBGSI3UP"
+    gdrive_file_id = "1VydyieHU2KBnLQZtoLxuvPkusXEToneQ"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
 
     # Parse annotations with 80/20 split
