@@ -288,14 +288,26 @@ class ImprovedFurnitureModelYOLOv12:
                     super(YOLOFeatureExtractor, self).__init__(**kwargs)
                     self.yolo_model = yolo_model
                     self.feature_dim = feature_dim
-                    # Store device information
                     self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+                    # Pre-warm the model to avoid initialization issues
+                    self._warmup_model()
+
+                def _warmup_model(self):
+                    """Warm up the model to avoid initialization issues"""
+                    try:
+                        dummy_input = torch.randn(1, 3, *self.yolo_model.model.args[0:2]).to(
+                            self.device
+                        )
+                        with torch.no_grad():
+                            _ = self.yolo_model.model(dummy_input)
+                    except Exception as e:
+                        print(f"Warning during model warmup: {e}")
 
                 def build(self, input_shape):
                     super(YOLOFeatureExtractor, self).build(input_shape)
 
                 def call(self, inputs):
-                    # Process the entire batch at once
                     def extract_features_batch(batch_images):
                         batch_features = []
                         batch_np = batch_images.numpy()
@@ -304,66 +316,79 @@ class ImprovedFurnitureModelYOLOv12:
                             img_np = batch_np[i]
 
                             try:
-                                # Convert to torch tensor and preprocess
-                                img_tensor = (
-                                    torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float()
-                                )
-                                img_tensor = img_tensor.to(self.device)
-                                img_tensor = img_tensor / 255.0  # Normalize to [0,1]
+                                # Method 1: Direct feature extraction from backbone
+                                if hasattr(self.yolo_model, "model") and hasattr(
+                                    self.yolo_model.model, "backbone"
+                                ):
+                                    # Preprocess image for YOLO
+                                    img_tensor = (
+                                        torch.from_numpy(img_np)
+                                        .permute(2, 0, 1)
+                                        .unsqueeze(0)
+                                        .float()
+                                    )
+                                    img_tensor = img_tensor.to(self.device)
+                                    img_tensor = img_tensor / 255.0
 
-                                # Extract features using YOLO backbone
-                                if hasattr(self.yolo_model, "model"):
-                                    # For Ultralytics YOLO models
-                                    model = self.yolo_model.model
+                                    # Get input shape expected by YOLO
+                                    if hasattr(self.yolo_model.model, "args"):
+                                        input_size = self.yolo_model.model.args[0]
+                                        if img_tensor.shape[2:] != (input_size, input_size):
+                                            img_tensor = torch.nn.functional.interpolate(
+                                                img_tensor,
+                                                size=(input_size, input_size),
+                                                mode="bilinear",
+                                                align_corners=False,
+                                            )
 
-                                    # Forward pass through backbone only
+                                    # Extract features using backbone only
                                     with torch.no_grad():
-                                        # Get feature maps from the backbone
-                                        if hasattr(model, "backbone"):
-                                            # YOLOv8+ style
-                                            features = model.backbone(img_tensor)
-                                            # Use the last feature map
-                                            if isinstance(features, (list, tuple)):
-                                                last_feature = features[-1]
-                                            else:
-                                                last_feature = features
-                                        else:
-                                            # Older YOLO style - manually extract features
-                                            x = img_tensor
-                                            for name, module in model.named_children():
-                                                if (
-                                                    "detect" in name.lower()
-                                                    or "head" in name.lower()
-                                                ):
-                                                    break
-                                                x = module(x)
-                                            last_feature = x
+                                        features = self.yolo_model.model.backbone(img_tensor)
 
-                                        # Apply global average pooling
+                                        # Handle different feature output formats
+                                        if isinstance(features, (list, tuple)):
+                                            # Use the last feature map
+                                            last_feature = features[-1]
+                                        elif isinstance(features, dict):
+                                            # Handle dictionary output (common in some YOLO versions)
+                                            last_feature = list(features.values())[-1]
+                                        else:
+                                            last_feature = features
+
+                                        # Global average pooling
                                         pooled_features = torch.mean(
                                             last_feature, dim=[2, 3]
                                         ).squeeze()
                                         feature_vector = pooled_features.cpu().numpy()
 
+                                # Method 2: Alternative approach using model's predict method
                                 else:
-                                    # Fallback: use prediction and extract features from results
-                                    results = self.yolo_model(img_np, verbose=False)
+                                    # Use YOLO's built-in prediction but extract intermediate features
+                                    results = self.yolo_model.predict(
+                                        img_np, verbose=False, save=False, augment=False
+                                    )
 
+                                    # Create feature vector from detection results
                                     if results and len(results) > 0:
                                         result = results[0]
                                         boxes = result.boxes
 
                                         if boxes is not None and len(boxes) > 0:
-                                            # Create feature vector from detection statistics
+                                            confidences = boxes.conf.cpu().numpy()
                                             num_detections = len(boxes)
                                             avg_confidence = (
-                                                float(boxes.conf.mean())
-                                                if len(boxes.conf) > 0
+                                                float(np.mean(confidences))
+                                                if len(confidences) > 0
                                                 else 0.0
                                             )
                                             max_confidence = (
-                                                float(boxes.conf.max())
-                                                if len(boxes.conf) > 0
+                                                float(np.max(confidences))
+                                                if len(confidences) > 0
+                                                else 0.0
+                                            )
+                                            min_confidence = (
+                                                float(np.min(confidences))
+                                                if len(confidences) > 0
                                                 else 0.0
                                             )
 
@@ -373,7 +398,13 @@ class ImprovedFurnitureModelYOLOv12:
                                                     num_detections,
                                                     avg_confidence,
                                                     max_confidence,
-                                                    *([0.0] * (self.feature_dim - 3)),
+                                                    min_confidence,
+                                                    (
+                                                        float(np.std(confidences))
+                                                        if len(confidences) > 1
+                                                        else 0.0
+                                                    ),
+                                                    *([0.0] * (self.feature_dim - 5)),
                                                 ]
                                             ).astype(np.float32)
                                         else:
@@ -386,9 +417,7 @@ class ImprovedFurnitureModelYOLOv12:
                                         )
 
                                 # Ensure consistent feature dimension
-                                if len(feature_vector.shape) == 0:  # scalar
-                                    feature_vector = np.array([feature_vector])
-
+                                feature_vector = feature_vector.flatten()
                                 if len(feature_vector) < self.feature_dim:
                                     feature_vector = np.pad(
                                         feature_vector,
@@ -400,6 +429,11 @@ class ImprovedFurnitureModelYOLOv12:
 
                             except Exception as e:
                                 print(f"Error in YOLO feature extraction for image {i}: {e}")
+                                # Print more detailed error info
+                                import traceback
+
+                                traceback.print_exc()
+
                                 feature_vector = np.zeros(self.feature_dim, dtype=np.float32)
 
                             batch_features.append(feature_vector.astype(np.float32))
@@ -421,19 +455,19 @@ class ImprovedFurnitureModelYOLOv12:
                     config.update({"feature_dim": self.feature_dim})
                     return config
 
-            # Extract YOLO features
-            yolo_features = YOLOFeatureExtractor(self.yolo_model, feature_dim=2048)(input_layer)
+            # Extract YOLO features with smaller feature dimension to avoid issues
+            yolo_features = YOLOFeatureExtractor(self.yolo_model, feature_dim=1024)(input_layer)
 
             # Build classification head
-            x = layers.Dense(1024, activation="relu", kernel_regularizer=l2(0.001))(yolo_features)
+            x = layers.Dense(512, activation="relu", kernel_regularizer=l2(0.001))(yolo_features)
             x = layers.BatchNormalization()(x)
             x = layers.Dropout(0.4)(x)
 
-            x = layers.Dense(512, activation="relu", kernel_regularizer=l2(0.001))(x)
+            x = layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001))(x)
             x = layers.BatchNormalization()(x)
             x = layers.Dropout(0.3)(x)
 
-            x = layers.Dense(256, activation="relu", kernel_regularizer=l2(0.001))(x)
+            x = layers.Dense(128, activation="relu", kernel_regularizer=l2(0.001))(x)
             x = layers.BatchNormalization()(x)
             x = layers.Dropout(0.2)(x)
 
@@ -478,10 +512,9 @@ class ImprovedFurnitureModelYOLOv12:
                 ]
             )
 
-        # Initial learning rate optimized for YOLO-style training
+        # Compilation (same as before)
         initial_learning_rate = 5e-5 if self.yolo_model is not None else 1e-4
 
-        # Custom metrics
         class Top1Accuracy(tf.keras.metrics.Metric):
             def __init__(self, name="top_1_accuracy", **kwargs):
                 super(Top1Accuracy, self).__init__(name=name, **kwargs)
@@ -512,7 +545,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
-            loss="categorical_crossentropy",  # For integer labels
+            loss="categorical_crossentropy",
             metrics=metrics,
         )
 
