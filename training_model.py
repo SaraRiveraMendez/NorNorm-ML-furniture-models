@@ -196,13 +196,17 @@ class ImprovedFurnitureModelYOLOv12:
                             batch_images.append(image)
                             batch_labels.append(label)
 
-                # Ensure we have at least one image
-                if not batch_images:
-                    # Create valid empty batch
-                    batch_images = [np.zeros((*self.img_size, 3))]
-                    batch_labels = [np.zeros(num_classes)]
+                # Convert to numpy arrays
+                batch_images = np.array(batch_images)
+                batch_labels = np.array(batch_labels)
 
-                return np.array(batch_images), np.array(batch_labels)
+                # Ensure labels are in the correct format (categorical)
+                if len(batch_labels.shape) == 1:
+                    batch_labels = tf.keras.utils.to_categorical(
+                        batch_labels, num_classes=num_classes
+                    )
+
+                return batch_images, batch_labels
 
             def load_and_preprocess_image_batch(self, image_path):
                 """Load and preprocess image for batch processing"""
@@ -454,7 +458,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
-            loss="sparse_categorical_crossentropy",  # For integer labels
+            loss="categorical_crossentropy",  # For integer labels
             metrics=metrics,
         )
 
