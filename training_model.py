@@ -555,32 +555,251 @@ class ImprovedFurnitureModelYOLOv12:
 
         return model
 
-    def train_model(self, train_generator, val_generator, epochs=80):
-        """Train model with callbacks (without intermediate checkpoint)"""
-        print("Starting YOLOv12-enhanced model training...")
+    def setup_progressive_unfreezing(self):
+        """Setup progressive unfreezing for YOLO model"""
+        if self.yolo_model is not None:
+            # Get the internal model
+            if hasattr(self.yolo_model.predictor, "model"):
+                yolo_internal_model = self.yolo_model.predictor.model
 
-        # Setup callbacks - WITHOUT ModelCheckpoint
-        callbacks = [
-            EarlyStopping(
-                monitor="val_accuracy",
-                patience=15,
-                restore_best_weights=True,
-                min_delta=0.001,
+                # Freeze all YOLO layers initially
+                for param in yolo_internal_model.parameters():
+                    param.requires_grad = False
+
+                print(
+                    f"YOLO model frozen initially. Total parameters: {sum(p.numel() for p in yolo_internal_model.parameters())}"
+                )
+                return yolo_internal_model
+            else:
+                print("Could not access YOLO internal model for progressive unfreezing")
+                return None
+        return None
+
+    def unfreeze_yolo_layers(self, epoch, total_epochs):
+        """Progressively unfreeze YOLO layers during training"""
+        if self.yolo_model is None:
+            return
+
+        if hasattr(self.yolo_model.predictor, "model"):
+            yolo_internal_model = self.yolo_model.predictor.model
+
+            # Define unfreezing schedule
+            unfreeze_schedule = {
+                int(total_epochs * 0.3): "last_layers",  # 30% through: unfreeze last few layers
+                int(total_epochs * 0.5): "middle_layers",  # 50% through: unfreeze middle layers
+                int(total_epochs * 0.7): "early_layers",  # 70% through: unfreeze early layers
+                int(total_epochs * 0.9): "all_layers",  # 90% through: unfreeze all layers
+            }
+
+            if epoch in unfreeze_schedule:
+                stage = unfreeze_schedule[epoch]
+
+                # Get all model layers
+                all_layers = (
+                    list(yolo_internal_model.model.children())
+                    if hasattr(yolo_internal_model, "model")
+                    else []
+                )
+                total_layers = len(all_layers)
+
+                if stage == "last_layers":
+                    # Unfreeze last 25% of layers
+                    unfreeze_from = int(total_layers * 0.75)
+                    for i, layer in enumerate(all_layers):
+                        if i >= unfreeze_from:
+                            for param in layer.parameters():
+                                param.requires_grad = True
+                    print(
+                        f"Epoch {epoch}: Unfroze last 25% of YOLO layers (from layer {unfreeze_from})"
+                    )
+
+                elif stage == "middle_layers":
+                    # Unfreeze middle 50% of layers
+                    unfreeze_from = int(total_layers * 0.5)
+                    for i, layer in enumerate(all_layers):
+                        if i >= unfreeze_from:
+                            for param in layer.parameters():
+                                param.requires_grad = True
+                    print(
+                        f"Epoch {epoch}: Unfroze middle 50% of YOLO layers (from layer {unfreeze_from})"
+                    )
+
+                elif stage == "early_layers":
+                    # Unfreeze first 75% of layers
+                    unfreeze_from = int(total_layers * 0.25)
+                    for i, layer in enumerate(all_layers):
+                        if i >= unfreeze_from:
+                            for param in layer.parameters():
+                                param.requires_grad = True
+                    print(f"Epoch {epoch}: Unfroze 75% of YOLO layers (from layer {unfreeze_from})")
+
+                elif stage == "all_layers":
+                    # Unfreeze all layers
+                    for param in yolo_internal_model.parameters():
+                        param.requires_grad = True
+                    print(f"Epoch {epoch}: Unfroze all YOLO layers")
+
+                # Reduce learning rate when unfreezing new layers
+                current_lr = float(self.model.optimizer.learning_rate)
+                new_lr = current_lr * 0.5
+                self.model.optimizer.learning_rate.assign(new_lr)
+                print(f"Reduced learning rate from {current_lr:.2e} to {new_lr:.2e}")
+
+    # Custom callback for progressive unfreezing
+    class ProgressiveUnfreezingCallback(tf.keras.callbacks.Callback):
+        def __init__(self, model_instance):
+            super(ProgressiveUnfreezingCallback, self).__init__()
+            self.model_instance = model_instance
+            self.total_epochs = None
+
+        def on_train_begin(self, logs=None):
+            self.total_epochs = self.params["epochs"]
+            print(f"Progressive unfreezing enabled for {self.total_epochs} epochs")
+
+        def on_epoch_begin(self, epoch, logs=None):
+            self.model_instance.unfreeze_yolo_layers(epoch, self.total_epochs)
+
+        # Add these methods to your ImprovedFurnitureModelYOLOv12 class
+
+        def setup_progressive_unfreezing(self):
+            """Setup progressive unfreezing for YOLO model"""
+            if self.yolo_model is not None:
+                # Get the internal model
+                if hasattr(self.yolo_model.predictor, "model"):
+                    yolo_internal_model = self.yolo_model.predictor.model
+
+                    # Freeze all YOLO layers initially
+                    for param in yolo_internal_model.parameters():
+                        param.requires_grad = False
+
+                    print(
+                        f"YOLO model frozen initially. Total parameters: {sum(p.numel() for p in yolo_internal_model.parameters())}"
+                    )
+                    return yolo_internal_model
+                else:
+                    print("Could not access YOLO internal model for progressive unfreezing")
+                    return None
+            return None
+
+        def unfreeze_yolo_layers(self, epoch, total_epochs):
+            """Progressively unfreeze YOLO layers during training"""
+            if self.yolo_model is None:
+                return
+
+            if hasattr(self.yolo_model.predictor, "model"):
+                yolo_internal_model = self.yolo_model.predictor.model
+
+                # Define unfreezing schedule
+                unfreeze_schedule = {
+                    int(total_epochs * 0.3): "last_layers",  # 30% through: unfreeze last few layers
+                    int(total_epochs * 0.5): "middle_layers",  # 50% through: unfreeze middle layers
+                    int(total_epochs * 0.7): "early_layers",  # 70% through: unfreeze early layers
+                    int(total_epochs * 0.9): "all_layers",  # 90% through: unfreeze all layers
+                }
+
+                if epoch in unfreeze_schedule:
+                    stage = unfreeze_schedule[epoch]
+
+                    # Get all model layers
+                    all_layers = (
+                        list(yolo_internal_model.model.children())
+                        if hasattr(yolo_internal_model, "model")
+                        else []
+                    )
+                    total_layers = len(all_layers)
+
+                    if stage == "last_layers":
+                        # Unfreeze last 25% of layers
+                        unfreeze_from = int(total_layers * 0.75)
+                        for i, layer in enumerate(all_layers):
+                            if i >= unfreeze_from:
+                                for param in layer.parameters():
+                                    param.requires_grad = True
+                        print(
+                            f"Epoch {epoch}: Unfroze last 25% of YOLO layers (from layer {unfreeze_from})"
+                        )
+
+                    elif stage == "middle_layers":
+                        # Unfreeze middle 50% of layers
+                        unfreeze_from = int(total_layers * 0.5)
+                        for i, layer in enumerate(all_layers):
+                            if i >= unfreeze_from:
+                                for param in layer.parameters():
+                                    param.requires_grad = True
+                        print(
+                            f"Epoch {epoch}: Unfroze middle 50% of YOLO layers (from layer {unfreeze_from})"
+                        )
+
+                    elif stage == "early_layers":
+                        # Unfreeze first 75% of layers
+                        unfreeze_from = int(total_layers * 0.25)
+                        for i, layer in enumerate(all_layers):
+                            if i >= unfreeze_from:
+                                for param in layer.parameters():
+                                    param.requires_grad = True
+                        print(
+                            f"Epoch {epoch}: Unfroze 75% of YOLO layers (from layer {unfreeze_from})"
+                        )
+
+                    elif stage == "all_layers":
+                        # Unfreeze all layers
+                        for param in yolo_internal_model.parameters():
+                            param.requires_grad = True
+                        print(f"Epoch {epoch}: Unfroze all YOLO layers")
+
+                    # Reduce learning rate when unfreezing new layers
+                    current_lr = float(self.model.optimizer.learning_rate)
+                    new_lr = current_lr * 0.5
+                    self.model.optimizer.learning_rate.assign(new_lr)
+                    print(f"Reduced learning rate from {current_lr:.2e} to {new_lr:.2e}")
+
+        # Modified train_model method
+        def train_model(self, train_generator, val_generator, epochs=80):
+            """Train model with progressive unfreezing and callbacks"""
+            print("Starting YOLOv12-enhanced model training with progressive unfreezing...")
+
+            # Setup progressive unfreezing
+            yolo_internal_model = self.setup_progressive_unfreezing()
+
+            # Custom callback for progressive unfreezing
+            class ProgressiveUnfreezingCallback(tf.keras.callbacks.Callback):
+                def __init__(self, model_instance):
+                    super(ProgressiveUnfreezingCallback, self).__init__()
+                    self.model_instance = model_instance
+                    self.total_epochs = None
+
+                def on_train_begin(self, logs=None):
+                    self.total_epochs = self.params["epochs"]
+                    print(f"Progressive unfreezing enabled for {self.total_epochs} epochs")
+
+                def on_epoch_begin(self, epoch, logs=None):
+                    self.model_instance.unfreeze_yolo_layers(epoch, self.total_epochs)
+
+            # Setup callbacks
+            callbacks = [
+                EarlyStopping(
+                    monitor="val_accuracy",
+                    patience=15,
+                    restore_best_weights=True,
+                    min_delta=0.001,
+                    verbose=1,
+                ),
+                ReduceLROnPlateau(
+                    monitor="val_loss", factor=0.3, patience=8, min_lr=1e-8, verbose=1
+                ),
+                ProgressiveUnfreezingCallback(self),
+            ]
+
+            # Train the model
+            history = self.model.fit(
+                train_generator,
+                epochs=epochs,
+                validation_data=val_generator,
+                callbacks=callbacks,
                 verbose=1,
-            ),
-            ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=8, min_lr=1e-8, verbose=1),
-        ]
+            )
 
-        # Train the model
-        history = self.model.fit(
-            train_generator,
-            epochs=epochs,
-            validation_data=val_generator,
-            callbacks=callbacks,
-            verbose=1,
-        )
-
-        return history
+            return history
 
     def create_confusion_matrix(self, val_generator):
         """Generate and save confusion matrix"""
