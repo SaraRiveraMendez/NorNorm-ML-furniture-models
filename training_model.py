@@ -293,74 +293,66 @@ class ImprovedFurnitureModelYOLOv12:
                     super(YOLOFeatureExtractor, self).build(input_shape)
 
                 def call(self, inputs):
-                    # This will be called during training/inference
-                    batch_size = tf.shape(inputs)[0]
+                    # Process the entire batch at once
+                    def extract_features_batch(batch_images):
+                        batch_features = []
 
-                    # Convert normalized inputs back to 0-255 range for YOLO
-                    inputs_uint8 = tf.cast(inputs * 255.0, tf.uint8)
+                        # Convert to numpy for processing
+                        batch_np = batch_images.numpy()
 
-                    # Process each image in the batch
-                    def extract_features_single(img):
-                        # Convert tensor to numpy for YOLO processing
-                        img_np = img.numpy()
+                        for i in range(batch_np.shape[0]):
+                            img_np = batch_np[i]
 
-                        try:
-                            # Run YOLO inference
-                            results = self.yolo_model(img_np, verbose=False)
-
-                            # Extract features from YOLO backbone
-                            # Access the model's backbone directly
-                            with torch.no_grad():
+                            try:
                                 # Prepare image tensor for YOLO backbone
                                 img_tensor = (
                                     torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float()
-                                    / 255.0
                                 )
                                 img_tensor = img_tensor.to(self.yolo_model.device)
 
-                                # Extract features from backbone
-                                features = self.yolo_model.model.backbone(img_tensor)
+                                # Extract features from YOLO backbone
+                                with torch.no_grad():
+                                    features = self.yolo_model.model.backbone(img_tensor)
 
-                                # Get the last feature map and apply global average pooling
-                                last_feature_map = features[-1]  # Shape: [1, channels, h, w]
-                                pooled_features = torch.mean(
-                                    last_feature_map, dim=[2, 3]
-                                ).squeeze()  # Global avg pooling
+                                    # Get the last feature map and apply global average pooling
+                                    last_feature_map = features[-1]  # Shape: [1, channels, h, w]
+                                    pooled_features = torch.mean(
+                                        last_feature_map, dim=[2, 3]
+                                    ).squeeze()
 
-                                # Convert back to numpy and ensure consistent size
-                                feature_vector = pooled_features.cpu().numpy()
+                                    # Convert back to numpy and ensure consistent size
+                                    feature_vector = pooled_features.cpu().numpy()
 
-                                # Pad or truncate to consistent size
-                                if len(feature_vector) < self.feature_dim:
-                                    feature_vector = np.pad(
-                                        feature_vector, (0, self.feature_dim - len(feature_vector))
-                                    )
-                                elif len(feature_vector) > self.feature_dim:
-                                    feature_vector = feature_vector[: self.feature_dim]
+                                    # Ensure consistent feature dimension
+                                    if len(feature_vector.shape) == 0:  # scalar
+                                        feature_vector = np.array([feature_vector])
 
-                        except Exception as e:
-                            print(f"Error in YOLO feature extraction: {e}")
-                            # Fallback to zero features
-                            feature_vector = np.zeros(self.feature_dim)
+                                    if len(feature_vector) < self.feature_dim:
+                                        feature_vector = np.pad(
+                                            feature_vector,
+                                            (0, self.feature_dim - len(feature_vector)),
+                                        )
+                                    elif len(feature_vector) > self.feature_dim:
+                                        feature_vector = feature_vector[: self.feature_dim]
 
-                        return feature_vector.astype(np.float32)
+                            except Exception as e:
+                                print(f"Error in YOLO feature extraction for image {i}: {e}")
+                                # Fallback to zero features
+                                feature_vector = np.zeros(self.feature_dim)
 
-                    # Apply feature extraction to each image in batch
-                    features_list = tf.py_function(
-                        func=lambda batch: tf.stack(
-                            [
-                                tf.py_function(extract_features_single, [batch[i]], tf.float32)
-                                for i in range(batch_size)
-                            ]
-                        ),
-                        inp=[inputs_uint8],
-                        Tout=tf.float32,
+                            batch_features.append(feature_vector.astype(np.float32))
+
+                        return np.array(batch_features, dtype=np.float32)
+
+                    # Use tf.py_function to process the batch
+                    features = tf.py_function(
+                        func=extract_features_batch, inp=[inputs], Tout=tf.float32
                     )
 
-                    # Ensure proper shape
-                    features_list.set_shape([None, self.feature_dim])
+                    # Set the shape explicitly
+                    features.set_shape([None, self.feature_dim])
 
-                    return features_list
+                    return features
 
                 def get_config(self):
                     config = super(YOLOFeatureExtractor, self).get_config()
@@ -458,7 +450,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
-            loss="categorical_crossentropy",  # For integer labels
+            loss="sparse_categorical_crossentropy",  # For integer labels
             metrics=metrics,
         )
 
