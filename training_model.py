@@ -1131,7 +1131,7 @@ def main():
     furniture_model.initialize_yolov12(model_size="x")
 
     # Download and prepare dataset
-    gdrive_file_id = "1VydyieHU2KBnLQZtoLxuvPkusXEToneQ"
+    gdrive_file_id = "1zNi9PYa12Vh6klYXub1p0Hd3Q6NE59Bn"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
 
     # Parse annotations with 80/20 split
