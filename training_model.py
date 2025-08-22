@@ -686,10 +686,10 @@ class ImprovedFurnitureModelYOLOv12:
             self.model.optimizer.learning_rate.assign(new_lr)
             print(f"Reduced learning rate from {current_lr:.2e} to {new_lr:.2e}")
 
-    # Custom callback for progressive unfreezing
+    # Custom callback for progressive unfreezing - MOVED OUTSIDE the train_model method
     class ProgressiveUnfreezingCallback(tf.keras.callbacks.Callback):
         def __init__(self, model_instance):
-            super(ProgressiveUnfreezingCallback, self).__init__()
+            super().__init__()
             self.model_instance = model_instance
             self.total_epochs = None
 
