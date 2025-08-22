@@ -454,7 +454,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=initial_learning_rate),
-            loss="categorical_crossentropy",
+            loss="sparse_categorical_crossentropy",  # For integer labels
             metrics=metrics,
         )
 
