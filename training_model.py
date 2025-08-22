@@ -288,6 +288,8 @@ class ImprovedFurnitureModelYOLOv12:
                     super(YOLOFeatureExtractor, self).__init__(**kwargs)
                     self.yolo_model = yolo_model
                     self.feature_dim = feature_dim
+                    # Store device information
+                    self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
                 def build(self, input_shape):
                     super(YOLOFeatureExtractor, self).build(input_shape)
@@ -296,113 +298,109 @@ class ImprovedFurnitureModelYOLOv12:
                     # Process the entire batch at once
                     def extract_features_batch(batch_images):
                         batch_features = []
-
-                        # Convert to numpy for processing
                         batch_np = batch_images.numpy()
 
                         for i in range(batch_np.shape[0]):
                             img_np = batch_np[i]
 
                             try:
-                                # Alternative approach: Use YOLO's prediction process to extract features
-                                with torch.no_grad():
-                                    # Run YOLO prediction which internally processes through backbone
-                                    results = self.yolo_model.predict(
-                                        img_np, verbose=False, save=False
-                                    )
+                                # Convert to torch tensor and preprocess
+                                img_tensor = (
+                                    torch.from_numpy(img_np).permute(2, 0, 1).unsqueeze(0).float()
+                                )
+                                img_tensor = img_tensor.to(self.device)
+                                img_tensor = img_tensor / 255.0  # Normalize to [0,1]
 
-                                    # Method 1: Try to access internal feature maps from the model
-                                    if hasattr(self.yolo_model.predictor, "model"):
-                                        model = self.yolo_model.predictor.model
+                                # Extract features using YOLO backbone
+                                if hasattr(self.yolo_model, "model"):
+                                    # For Ultralytics YOLO models
+                                    model = self.yolo_model.model
 
-                                        # Prepare input tensor
-                                        img_tensor = (
-                                            torch.from_numpy(img_np)
-                                            .permute(2, 0, 1)
-                                            .unsqueeze(0)
-                                            .float()
-                                        )
-                                        img_tensor = img_tensor.to(self.yolo_model.device)
-
-                                        # Forward pass through the model to get intermediate features
-                                        x = img_tensor / 255.0  # Normalize to [0,1]
-
-                                        # Process through layers and extract features
-                                        for i, layer in enumerate(model.model):
-                                            x = layer(x)
-                                            # Stop before detection head (typically around layer 10-15)
-                                            if i == 10 or (
-                                                hasattr(layer, "__class__")
-                                                and "Detect" in str(layer.__class__)
-                                            ):
-                                                break
-
-                                        # Use the last feature map
-                                        last_feature_map = x
-                                    else:
-                                        # Fallback: Create features from YOLO results
-                                        # Get detection boxes and create a feature representation
-                                        if results and len(results) > 0:
-                                            result = results[0]
-
-                                            # Extract detection information as features
-                                            boxes = result.boxes
-                                            if boxes is not None and len(boxes) > 0:
-                                                # Create feature vector from detection statistics
-                                                num_detections = len(boxes)
-                                                avg_confidence = (
-                                                    float(boxes.conf.mean())
-                                                    if len(boxes.conf) > 0
-                                                    else 0.0
-                                                )
-
-                                                # Create a simple feature vector
-                                                feature_vector = np.array(
-                                                    [
-                                                        num_detections,
-                                                        avg_confidence,
-                                                        *([0.0] * (self.feature_dim - 2)),
-                                                    ]
-                                                ).astype(np.float32)
-
-                                                continue  # Skip the pooling part
+                                    # Forward pass through backbone only
+                                    with torch.no_grad():
+                                        # Get feature maps from the backbone
+                                        if hasattr(model, "backbone"):
+                                            # YOLOv8+ style
+                                            features = model.backbone(img_tensor)
+                                            # Use the last feature map
+                                            if isinstance(features, (list, tuple)):
+                                                last_feature = features[-1]
                                             else:
-                                                # No detections - use zero features
-                                                feature_vector = np.zeros(
-                                                    self.feature_dim, dtype=np.float32
-                                                )
-                                                continue
+                                                last_feature = features
                                         else:
-                                            # No results - use zero features
+                                            # Older YOLO style - manually extract features
+                                            x = img_tensor
+                                            for name, module in model.named_children():
+                                                if (
+                                                    "detect" in name.lower()
+                                                    or "head" in name.lower()
+                                                ):
+                                                    break
+                                                x = module(x)
+                                            last_feature = x
+
+                                        # Apply global average pooling
+                                        pooled_features = torch.mean(
+                                            last_feature, dim=[2, 3]
+                                        ).squeeze()
+                                        feature_vector = pooled_features.cpu().numpy()
+
+                                else:
+                                    # Fallback: use prediction and extract features from results
+                                    results = self.yolo_model(img_np, verbose=False)
+
+                                    if results and len(results) > 0:
+                                        result = results[0]
+                                        boxes = result.boxes
+
+                                        if boxes is not None and len(boxes) > 0:
+                                            # Create feature vector from detection statistics
+                                            num_detections = len(boxes)
+                                            avg_confidence = (
+                                                float(boxes.conf.mean())
+                                                if len(boxes.conf) > 0
+                                                else 0.0
+                                            )
+                                            max_confidence = (
+                                                float(boxes.conf.max())
+                                                if len(boxes.conf) > 0
+                                                else 0.0
+                                            )
+
+                                            # More comprehensive feature vector
+                                            feature_vector = np.array(
+                                                [
+                                                    num_detections,
+                                                    avg_confidence,
+                                                    max_confidence,
+                                                    *([0.0] * (self.feature_dim - 3)),
+                                                ]
+                                            ).astype(np.float32)
+                                        else:
                                             feature_vector = np.zeros(
                                                 self.feature_dim, dtype=np.float32
                                             )
-                                            continue
-
-                                    # Apply global average pooling to feature maps
-                                    pooled_features = torch.mean(
-                                        last_feature_map, dim=[2, 3]
-                                    ).squeeze()
-
-                                    # Convert back to numpy and ensure consistent size
-                                    feature_vector = pooled_features.cpu().numpy()
-
-                                    # Ensure consistent feature dimension
-                                    if len(feature_vector.shape) == 0:  # scalar
-                                        feature_vector = np.array([feature_vector])
-
-                                    if len(feature_vector) < self.feature_dim:
-                                        feature_vector = np.pad(
-                                            feature_vector,
-                                            (0, self.feature_dim - len(feature_vector)),
+                                    else:
+                                        feature_vector = np.zeros(
+                                            self.feature_dim, dtype=np.float32
                                         )
-                                    elif len(feature_vector) > self.feature_dim:
-                                        feature_vector = feature_vector[: self.feature_dim]
+
+                                # Ensure consistent feature dimension
+                                if len(feature_vector.shape) == 0:  # scalar
+                                    feature_vector = np.array([feature_vector])
+
+                                if len(feature_vector) < self.feature_dim:
+                                    feature_vector = np.pad(
+                                        feature_vector,
+                                        (0, self.feature_dim - len(feature_vector)),
+                                        mode="constant",
+                                    )
+                                elif len(feature_vector) > self.feature_dim:
+                                    feature_vector = feature_vector[: self.feature_dim]
 
                             except Exception as e:
                                 print(f"Error in YOLO feature extraction for image {i}: {e}")
-                                # Fallback to zero features
-                                feature_vector = np.zeros(self.feature_dim)
+                                feature_vector = np.zeros(self.feature_dim, dtype=np.float32)
 
                             batch_features.append(feature_vector.astype(np.float32))
 
@@ -426,7 +424,7 @@ class ImprovedFurnitureModelYOLOv12:
             # Extract YOLO features
             yolo_features = YOLOFeatureExtractor(self.yolo_model, feature_dim=2048)(input_layer)
 
-            # Build classification head on top of YOLO features
+            # Build classification head
             x = layers.Dense(1024, activation="relu", kernel_regularizer=l2(0.001))(yolo_features)
             x = layers.BatchNormalization()(x)
             x = layers.Dropout(0.4)(x)
