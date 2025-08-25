@@ -750,6 +750,7 @@ class ImprovedFurnitureModelYOLOv12:
             train_generator,
             epochs=epochs,
             validation_data=val_generator,
+            class_weight=self.class_weights,
             callbacks=callbacks,
             verbose=1,
         )
