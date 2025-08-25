@@ -99,7 +99,7 @@ class ImprovedFurnitureModelYOLOv12:
                             for line in lines:
                                 if line.strip():
                                     parts = line.strip().split()
-                                    if len(parts) >= 5:  # class_id, x, y, w, h
+                                    if len(parts) >= 5:
                                         class_id = int(parts[0])
 
                                         # Verify valid class_id
@@ -116,6 +116,20 @@ class ImprovedFurnitureModelYOLOv12:
         print(f"Total elements extracted: {total_elements}")
         print(f"Average elements per image: {total_elements/images_processed:.2f}")
 
+        # Calculate class weights for balancing
+        unique_labels = np.unique(all_labels)
+        class_weights_array = compute_class_weight("balanced", classes=unique_labels, y=all_labels)
+        self.class_weights = dict(zip(unique_labels, class_weights_array))
+
+        print(f"\nClass weights calculated for balancing:")
+        for class_id, weight in self.class_weights.items():
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {weight:.3f}")
+
         # Split data 80/20
         train_images, val_images, train_labels, val_labels = train_test_split(
             all_images,
@@ -128,8 +142,18 @@ class ImprovedFurnitureModelYOLOv12:
         print(f"Training samples: {len(train_images)}, Validation samples: {len(val_images)}")
 
         # Show class distribution
-        print(f"Class distribution in training:")
+        print(f"\nClass distribution in training:")
         unique, counts = np.unique(train_labels, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {count} samples")
+
+        print(f"\nClass distribution in validation:")
+        unique, counts = np.unique(val_labels, return_counts=True)
         for class_id, count in zip(unique, counts):
             class_name = (
                 self.class_names[class_id]
@@ -734,7 +758,7 @@ class ImprovedFurnitureModelYOLOv12:
     def create_confusion_matrix(self, val_generator):
         """Generate and save confusion matrix"""
         print("Generating confusion matrix...")
-        save_path = os.path.join(self.save_dir, "confusion_matrix.png")
+        save_path = os.path.join(self.save_dir, "confusion_matrix_class_weight.png")
 
         # Get predictions and true labels
         y_true = []
@@ -1061,7 +1085,7 @@ def main():
     furniture_model.initialize_yolov12(model_size="x")
 
     # Download and prepare dataset
-    gdrive_file_id = "1zNi9PYa12Vh6klYXub1p0Hd3Q6NE59Bn"
+    gdrive_file_id = "1Mfp9TV22_2eU47nZYU00LAs8HkPwAqYZ"
     dataset_path = furniture_model.download_and_extract_remote_dataset(gdrive_file_id)
 
     # Parse annotations with 80/20 split
