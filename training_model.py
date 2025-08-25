@@ -24,7 +24,7 @@ from ultralytics import YOLO
 
 
 class ImprovedFurnitureModelYOLOv12:
-    def __init__(self, img_size=(640, 640), batch_size=16):
+    def __init__(self, img_size=(640, 640), batch_size=32):
         self.img_size = img_size
         self.batch_size = batch_size
         self.label_encoder = LabelEncoder()
@@ -263,7 +263,7 @@ class ImprovedFurnitureModelYOLOv12:
 
         return train_generator, val_generator
 
-    def initialize_yolov12(self, model_size="x"):
+    def initialize_yolov12(self, model_size="n"):
         """Initialize YOLOv12 model"""
         try:
             model_name = f"yolo12{model_size}.pt"
@@ -1081,10 +1081,10 @@ class ImprovedFurnitureModelYOLOv12:
 def main():
     """Main training pipeline with YOLOv12 integration"""
     # Initialize model
-    furniture_model = ImprovedFurnitureModelYOLOv12(img_size=(640, 640), batch_size=16)
+    furniture_model = ImprovedFurnitureModelYOLOv12(img_size=(640, 640), batch_size=32)
 
     # Initialize YOLOv12
-    furniture_model.initialize_yolov12(model_size="x")
+    furniture_model.initialize_yolov12(model_size="n")
 
     # Download and prepare dataset
     gdrive_file_id = "1Mfp9TV22_2eU47nZYU00LAs8HkPwAqYZ"
