@@ -290,7 +290,7 @@ class PureYOLOv12FurnitureClassifier:
             epochs=epochs,
             imgsz=self.img_size,
             batch=self.batch_size,
-            device="auto",
+            device="cpu",
             workers=8,
             patience=25,
             save=True,
