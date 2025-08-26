@@ -312,7 +312,7 @@ class PureYOLOv12FurnitureClassifier:
             cls=1.0,  # Classification loss weight
             dfl=1.5,  # Distribution focal loss weight
             verbose=True,
-            callbacks=[callback],
+            ARGS=[callback],
         )
 
         print("Training completed!")
