@@ -301,7 +301,7 @@ class PureYOLOv12FurnitureClassifier:
             exist_ok=True,
             pretrained=True,
             optimizer="AdamW",
-            lr0=0.001,
+            lr0=5e-4,
             lrf=0.01,
             momentum=0.937,
             weight_decay=0.0005,
@@ -312,7 +312,7 @@ class PureYOLOv12FurnitureClassifier:
             cls=1.0,  # Classification loss weight
             dfl=1.5,  # Distribution focal loss weight
             verbose=True,
-            ARGS=[callback],
+            freeze=[callback],
         )
 
         print("Training completed!")
