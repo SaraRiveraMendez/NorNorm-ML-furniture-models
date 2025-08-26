@@ -254,7 +254,7 @@ class PureYOLOv12FurnitureClassifier:
     def train_model(self, dataset_path, epochs=100):
         """Train pure YOLOv12 classification model with progressive unfreezing"""
         print(f"\n{'='*60}")
-        print("STARTING PURE YOLOV12 CLASSIFICATION TRAINING")
+        print("STARTING PURE YOLOv12 CLASSIFICATION TRAINING")
         print(f"{'='*60}")
         print(f"Model: YOLOv12{self.model_size}")
         print(f"Epochs: {epochs}")
@@ -271,18 +271,19 @@ class PureYOLOv12FurnitureClassifier:
         # Create YOLO config
         config_path = self.create_yolo_classification_config(dataset_path)
 
-        # Custom training loop with progressive unfreezing
+        # Define progressive unfreezing callback
         class ProgressiveUnfreezeCallback:
             def __init__(self, classifier):
                 self.classifier = classifier
 
-            def on_train_epoch_start(self, trainer):
-                """Called at the start of each training epoch"""
+            def __call__(self, trainer):
+                """Called at the start of each epoch"""
                 current_epoch = trainer.epoch
                 self.classifier._apply_progressive_unfreeze(current_epoch)
 
-        # Add callback for progressive unfreezing
+        # Register callback with Ultralytics
         callback = ProgressiveUnfreezeCallback(self)
+        self.model.add_callback("on_train_epoch_start", callback)
 
         # Train the model
         results = self.model.train(
@@ -312,7 +313,6 @@ class PureYOLOv12FurnitureClassifier:
             cls=1.0,  # Classification loss weight
             dfl=1.5,  # Distribution focal loss weight
             verbose=True,
-            freeze=[callback],
         )
 
         print("Training completed!")
