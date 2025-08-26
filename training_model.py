@@ -62,7 +62,7 @@ class PureYOLOv12FurnitureClassifier:
         return extract_path
 
     def prepare_classification_dataset(self, dataset_path, train_split=0.8):
-        """Prepare dataset for classification (split train/val if only one folder exists)"""
+        """Extract ALL elements from images and split into train/validation 80/20"""
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
@@ -70,85 +70,99 @@ class PureYOLOv12FurnitureClassifier:
                 self.class_names = data_config.get("names", [])
                 print(f"Classes found: {self.class_names}")
 
-        # Check if train/val already exist
-        train_path = os.path.join(dataset_path, "train")
-        val_path = os.path.join(dataset_path, "val")
+        all_images = []
+        all_labels = []
+        total_elements = 0
+        images_processed = 0
 
-        if not (os.path.exists(train_path) and os.path.exists(val_path)):
-            print("No train/val split found — creating one automatically...")
+        # Process all splits (train and valid) together
+        for split in ["train", "valid"]:
+            images_dir = os.path.join(dataset_path, split, "images")
+            labels_dir = os.path.join(dataset_path, split, "labels")
 
-            os.makedirs(train_path, exist_ok=True)
-            os.makedirs(val_path, exist_ok=True)
+            if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
+                print(f"Directory {split} not found")
+                continue
 
-            # Case: dataset_path has folders per class directly
-            for class_name in self.class_names:
-                class_dir = os.path.join(dataset_path, class_name)
-                if not os.path.exists(class_dir):
-                    continue
+            for img_file in os.listdir(images_dir):
+                if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                    img_path = os.path.join(images_dir, img_file)
+                    label_file = os.path.splitext(img_file)[0] + ".txt"
+                    label_path = os.path.join(labels_dir, label_file)
 
-                images = [
-                    f
-                    for f in os.listdir(class_dir)
-                    if f.lower().endswith((".jpg", ".jpeg", ".png"))
-                ]
-                np.random.shuffle(images)
+                    if os.path.exists(label_path):
+                        with open(label_path, "r") as f:
+                            lines = f.readlines()
+                            elements_in_image = 0
 
-                split_idx = int(len(images) * train_split)
-                train_imgs, val_imgs = images[:split_idx], images[split_idx:]
+                            # Process ALL lines (all elements in the image)
+                            for line in lines:
+                                if line.strip():
+                                    parts = line.strip().split()
+                                    if len(parts) >= 5:
+                                        class_id = int(parts[0])
 
-                # Create subfolders
-                os.makedirs(os.path.join(train_path, class_name), exist_ok=True)
-                os.makedirs(os.path.join(val_path, class_name), exist_ok=True)
+                                        # Verify valid class_id
+                                        if 0 <= class_id < len(self.class_names):
+                                            all_images.append(img_path)
+                                            all_labels.append(class_id)
+                                            elements_in_image += 1
+                                            total_elements += 1
 
-                # Move images
-                for img in train_imgs:
-                    shutil.move(
-                        os.path.join(class_dir, img), os.path.join(train_path, class_name, img)
-                    )
-                for img in val_imgs:
-                    shutil.move(
-                        os.path.join(class_dir, img), os.path.join(val_path, class_name, img)
-                    )
+                            if elements_in_image > 0:
+                                images_processed += 1
 
-                # Remove original unsplit folder
-                shutil.rmtree(class_dir)
+        print(f"Images processed: {images_processed}")
+        print(f"Total elements extracted: {total_elements}")
+        print(f"Average elements per image: {total_elements/images_processed:.2f}")
 
-        # After split, count samples
-        train_samples = {}
-        val_samples = {}
-        for split, sample_dict in zip(["train", "val"], [train_samples, val_samples]):
-            split_path = os.path.join(dataset_path, split)
-            for class_name in self.class_names:
-                class_path = os.path.join(split_path, class_name)
-                if os.path.exists(class_path):
-                    sample_dict[class_name] = len(
-                        [
-                            f
-                            for f in os.listdir(class_path)
-                            if f.lower().endswith((".jpg", ".jpeg", ".png"))
-                        ]
-                    )
+        # Calculate class weights for balancing
+        unique_labels = np.unique(all_labels)
+        class_weights_array = compute_class_weight("balanced", classes=unique_labels, y=all_labels)
+        self.class_weights = dict(zip(unique_labels, class_weights_array))
 
-        # Calculate class weights
-        if train_samples:
-            all_labels = []
-            for class_idx, class_name in enumerate(self.class_names):
-                count = train_samples.get(class_name, 0)
-                all_labels.extend([class_idx] * count)
+        print(f"\nClass weights calculated for balancing:")
+        for class_id, weight in self.class_weights.items():
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {weight:.3f}")
 
-            if all_labels:
-                unique_labels = np.unique(all_labels)
-                class_weights_array = compute_class_weight(
-                    "balanced", classes=unique_labels, y=all_labels
-                )
-                self.class_weights = dict(zip(unique_labels, class_weights_array))
+        # Split data 80/20
+        train_images, val_images, train_labels, val_labels = train_test_split(
+            all_images,
+            all_labels,
+            test_size=(1 - train_split),
+            random_state=42,
+            stratify=all_labels,
+        )
 
-                print("\nClass weights calculated:")
-                for class_id, weight in self.class_weights.items():
-                    print(f"  {self.class_names[class_id]}: {weight:.3f}")
+        print(f"Training samples: {len(train_images)}, Validation samples: {len(val_images)}")
 
-        self._show_dataset_statistics(train_samples, val_samples)
-        return dataset_path
+        # Show class distribution
+        print(f"\nClass distribution in training:")
+        unique, counts = np.unique(train_labels, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {count} samples")
+
+        print(f"\nClass distribution in validation:")
+        unique, counts = np.unique(val_labels, return_counts=True)
+        for class_id, count in zip(unique, counts):
+            class_name = (
+                self.class_names[class_id]
+                if class_id < len(self.class_names)
+                else f"Unknown_{class_id}"
+            )
+            print(f"  {class_name}: {count} samples")
+
+        return (train_images, train_labels), (val_images, val_labels)
 
     def _show_dataset_statistics(self, train_samples, val_samples):
         """Show dataset statistics"""
