@@ -62,7 +62,7 @@ class PureYOLOv12FurnitureClassifier:
         return extract_path
 
     def prepare_classification_dataset(self, dataset_path, train_split=0.8):
-        """Prepare dataset for classification (assuming it's already in classification format)"""
+        """Prepare dataset for classification (split train/val if only one folder exists)"""
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
@@ -70,32 +70,66 @@ class PureYOLOv12FurnitureClassifier:
                 self.class_names = data_config.get("names", [])
                 print(f"Classes found: {self.class_names}")
 
-        # Verify dataset structure (assuming it's already in classification format)
-        classification_path = dataset_path
+        # Check if train/val already exist
+        train_path = os.path.join(dataset_path, "train")
+        val_path = os.path.join(dataset_path, "val")
 
-        # Count samples per class
+        if not (os.path.exists(train_path) and os.path.exists(val_path)):
+            print("No train/val split found — creating one automatically...")
+
+            os.makedirs(train_path, exist_ok=True)
+            os.makedirs(val_path, exist_ok=True)
+
+            # Case: dataset_path has folders per class directly
+            for class_name in self.class_names:
+                class_dir = os.path.join(dataset_path, class_name)
+                if not os.path.exists(class_dir):
+                    continue
+
+                images = [
+                    f
+                    for f in os.listdir(class_dir)
+                    if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                ]
+                np.random.shuffle(images)
+
+                split_idx = int(len(images) * train_split)
+                train_imgs, val_imgs = images[:split_idx], images[split_idx:]
+
+                # Create subfolders
+                os.makedirs(os.path.join(train_path, class_name), exist_ok=True)
+                os.makedirs(os.path.join(val_path, class_name), exist_ok=True)
+
+                # Move images
+                for img in train_imgs:
+                    shutil.move(
+                        os.path.join(class_dir, img), os.path.join(train_path, class_name, img)
+                    )
+                for img in val_imgs:
+                    shutil.move(
+                        os.path.join(class_dir, img), os.path.join(val_path, class_name, img)
+                    )
+
+                # Remove original unsplit folder
+                shutil.rmtree(class_dir)
+
+        # After split, count samples
         train_samples = {}
         val_samples = {}
+        for split, sample_dict in zip(["train", "val"], [train_samples, val_samples]):
+            split_path = os.path.join(dataset_path, split)
+            for class_name in self.class_names:
+                class_path = os.path.join(split_path, class_name)
+                if os.path.exists(class_path):
+                    sample_dict[class_name] = len(
+                        [
+                            f
+                            for f in os.listdir(class_path)
+                            if f.lower().endswith((".jpg", ".jpeg", ".png"))
+                        ]
+                    )
 
-        for split in ["train", "val"]:
-            split_path = os.path.join(classification_path, split)
-            if os.path.exists(split_path):
-                for class_name in self.class_names:
-                    class_path = os.path.join(split_path, class_name)
-                    if os.path.exists(class_path):
-                        count = len(
-                            [
-                                f
-                                for f in os.listdir(class_path)
-                                if f.lower().endswith((".jpg", ".jpeg", ".png"))
-                            ]
-                        )
-                        if split == "train":
-                            train_samples[class_name] = count
-                        else:
-                            val_samples[class_name] = count
-
-        # Calculate class weights based on training data
+        # Calculate class weights
         if train_samples:
             all_labels = []
             for class_idx, class_name in enumerate(self.class_names):
@@ -109,15 +143,12 @@ class PureYOLOv12FurnitureClassifier:
                 )
                 self.class_weights = dict(zip(unique_labels, class_weights_array))
 
-                print(f"\nClass weights calculated:")
+                print("\nClass weights calculated:")
                 for class_id, weight in self.class_weights.items():
-                    class_name = self.class_names[class_id]
-                    print(f"  {class_name}: {weight:.3f}")
+                    print(f"  {self.class_names[class_id]}: {weight:.3f}")
 
-        # Show dataset statistics
         self._show_dataset_statistics(train_samples, val_samples)
-
-        return classification_path
+        return dataset_path
 
     def _show_dataset_statistics(self, train_samples, val_samples):
         """Show dataset statistics"""
