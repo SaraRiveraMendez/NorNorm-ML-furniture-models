@@ -254,14 +254,19 @@ class PureYOLOv12FurnitureClassifier:
         if not hasattr(self.model, "model") or self.model.model is None:
             return
 
+        # First, ensure all parameters require gradients
+        for param in self.model.model.parameters():
+            param.requires_grad = True
+
         for schedule in reversed(self.progressive_unfreeze_schedule):
             if current_epoch >= schedule["epoch"]:
                 if "freeze_backbone" in schedule and schedule["freeze_backbone"]:
-                    # Freeze backbone layers
+                    # Freeze backbone layers, keep classifier head unfrozen
                     for name, param in self.model.model.named_parameters():
-                        if not name.startswith("model.22"):  # Keep classifier head unfrozen
+                        if not name.startswith("model.22"):  # Freeze everything except classifier
                             param.requires_grad = False
                     print(f"Epoch {current_epoch}: Backbone frozen, training head only")
+                    break
 
                 elif "unfreeze_layers" in schedule:
                     layers_to_unfreeze = schedule["unfreeze_layers"]
@@ -271,14 +276,15 @@ class PureYOLOv12FurnitureClassifier:
                         for param in self.model.model.parameters():
                             param.requires_grad = True
                         print(f"Epoch {current_epoch}: All layers unfrozen")
+                        break
                     else:
-                        # Unfreeze specific layers
-                        for layer_name in layers_to_unfreeze:
-                            for name, param in self.model.model.named_parameters():
-                                if layer_name in name:
-                                    param.requires_grad = True
+                        # Unfreeze specific layers, freeze others
+                        for name, param in self.model.model.named_parameters():
+                            # Check if this parameter is in the layers to unfreeze
+                            should_unfreeze = any(layer in name for layer in layers_to_unfreeze)
+                            param.requires_grad = should_unfreeze
                         print(f"Epoch {current_epoch}: Unfrozen layers: {layers_to_unfreeze}")
-                break
+                        break
 
     def create_yolo_classification_config(self, dataset_path):
         """Create YOLO classification configuration"""
@@ -316,19 +322,8 @@ class PureYOLOv12FurnitureClassifier:
         # Create YOLO config
         config_path = self.create_yolo_classification_config(dataset_path)
 
-        # Define progressive unfreezing callback
-        class ProgressiveUnfreezeCallback:
-            def __init__(self, classifier):
-                self.classifier = classifier
-
-            def __call__(self, trainer):
-                """Called at the start of each epoch"""
-                current_epoch = trainer.epoch
-                self.classifier._apply_progressive_unfreeze(current_epoch)
-
-        # Register callback with Ultralytics
-        callback = ProgressiveUnfreezeCallback(self)
-        self.model.add_callback("on_train_epoch_start", callback)
+        # Apply initial freezing (start with backbone frozen)
+        self._apply_progressive_unfreeze(0)
 
         # Train the model
         results = self.model.train(
@@ -693,19 +688,17 @@ def main():
 
     # Train model with progressive unfreezing
     print("\nStep 4: Training model with progressive unfreezing...")
-    training_results = classifier.train_model(
-        dataset_path, epochs=100
-    )  # keep dataset_path (string)
+    training_results = classifier.train_model(dataset_path, epochs=100)
     print(training_results)
 
     # Validate model with Top-K metrics
     print("\nStep 5: Validating model with Top-K accuracy...")
-    validation_results = classifier.validate_model(dataset_path)  # use dataset_path
+    validation_results = classifier.validate_model(dataset_path)
     print(validation_results)
 
     # Create confusion matrix with Top-K metrics
     print("\nStep 6: Creating confusion matrix with Top-K metrics...")
-    classifier.create_confusion_matrix(dataset_path)  # use dataset_path
+    classifier.create_confusion_matrix(dataset_path)
 
     # Save model info
     print("\nStep 7: Saving model information...")
