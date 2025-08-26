@@ -76,7 +76,7 @@ class PureYOLOv12FurnitureClassifier:
         images_processed = 0
 
         # Process all splits (train and valid) together
-        for split in ["train", "valid"]:
+        for split in ["train", "val"]:
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
@@ -285,7 +285,7 @@ class PureYOLOv12FurnitureClassifier:
         config = {
             "path": os.path.abspath(dataset_path),
             "train": "train",
-            "val": "val",
+            "val": "valid",
             "names": {i: name for i, name in enumerate(self.class_names)},
         }
 
@@ -437,7 +437,7 @@ class PureYOLOv12FurnitureClassifier:
         """Create confusion matrix from validation results"""
         print("Creating confusion matrix...")
 
-        val_path = os.path.join(dataset_path, "val")
+        val_path = os.path.join(dataset_path, "valid")
         y_true = []
         y_pred = []
         y_pred_probs = []
