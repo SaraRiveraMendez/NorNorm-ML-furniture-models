@@ -681,7 +681,9 @@ def main():
 
     # Prepare classification dataset (no cropping needed)
     print("\nStep 2: Preparing classification dataset...")
-    classification_path = classifier.prepare_classification_dataset(dataset_path, train_split=0.8)
+    (train_images, train_labels), (val_images, val_labels) = (
+        classifier.prepare_classification_dataset(dataset_path, train_split=0.8)
+    )
 
     # Initialize model
     print("\nStep 3: Initializing YOLOv12 model...")
@@ -691,23 +693,26 @@ def main():
 
     # Train model with progressive unfreezing
     print("\nStep 4: Training model with progressive unfreezing...")
-    training_results = classifier.train_model(classification_path, epochs=100)
+    training_results = classifier.train_model(
+        dataset_path, epochs=100
+    )  # keep dataset_path (string)
     print(training_results)
+
     # Validate model with Top-K metrics
     print("\nStep 5: Validating model with Top-K accuracy...")
-    validation_results = classifier.validate_model(classification_path)
+    validation_results = classifier.validate_model(dataset_path)  # use dataset_path
     print(validation_results)
 
     # Create confusion matrix with Top-K metrics
     print("\nStep 6: Creating confusion matrix with Top-K metrics...")
-    classifier.create_confusion_matrix(classification_path)
+    classifier.create_confusion_matrix(dataset_path)  # use dataset_path
 
     # Save model info
     print("\nStep 7: Saving model information...")
     classifier.save_model_info()
 
     # Cleanup temporary files
-    if os.path.exists("dataset/") and dataset_path != classification_path:
+    if os.path.exists("dataset/") and dataset_path != "dataset/":
         shutil.rmtree("dataset/")
 
     print(f"\n{'='*60}")
