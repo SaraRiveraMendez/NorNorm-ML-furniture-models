@@ -216,10 +216,10 @@ class PureYOLOv12FurnitureClassifier:
 
         print(f"Total annotations converted: {converted_count}")
 
-    # Ejecutar la conversión
+    # Ejecute the convertion
     print("Converting segmentation to detection...")
-    convert_segmentation_to_detection("dataset/labels/train")
-    convert_segmentation_to_detection("dataset/labels/val")
+    convert_segmentation_to_detection("dataset/train/labels")
+    # convert_segmentation_to_detection("dataset/labels/val")
 
     def initialize_yolov12_classifier(self):
         """Initialize YOLOv12 model for classification"""
