@@ -40,57 +40,129 @@ class PureYOLOv12FurnitureClassifier:
         print(f"Save directory created: {self.save_dir}")
 
     def convert_segmentation_to_detection(self, label_dir):
-        """Convert any segmentation annotations to detection by creating bounding boxes"""
+        """Convert segmentation annotations to detection format properly"""
         converted_count = 0
+        files_processed = 0
 
-        for label_file in os.listdir(label_dir):
-            if label_file.endswith(".txt"):
-                file_path = os.path.join(label_dir, label_file)
-                new_lines = []
-                needs_conversion = False
+        print(f"Processing label directory: {label_dir}")
 
+        if not os.path.exists(label_dir):
+            print(f"Label directory does not exist: {label_dir}")
+            return 0
+
+        label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
+        print(f"Found {len(label_files)} label files to process")
+
+        for label_file in label_files:
+            file_path = os.path.join(label_dir, label_file)
+            new_lines = []
+            file_converted = False
+
+            try:
                 with open(file_path, "r") as f:
                     lines = f.readlines()
 
-                for line in lines:
-                    parts = line.strip().split()
-                    if len(parts) > 5:  # This is segmentation
-                        needs_conversion = True
-                        # Convert segmentation points to bounding box
-                        class_id = parts[0]
-                        points = list(map(float, parts[1:]))
+                for line_num, line in enumerate(lines):
+                    line = line.strip()
+                    if not line:
+                        continue
 
-                        # Get all x and y coordinates
-                        x_coords = points[0::2]  # x values
-                        y_coords = points[1::2]  # y values
+                    parts = line.split()
+                    if len(parts) < 5:
+                        print(f"Warning: Invalid annotation in {label_file}, line {line_num + 1}")
+                        continue
 
-                        # Calculate bounding box coordinates
+                    class_id = parts[0]
+                    coords = parts[1:]
+
+                    # Check if this is segmentation format (more than 4 coordinates)
+                    if len(coords) > 4:
+                        file_converted = True
+                        converted_count += 1
+
+                        # Convert string coordinates to floats
+                        try:
+                            coords_float = [float(x) for x in coords]
+                        except ValueError:
+                            print(
+                                f"Warning: Invalid coordinates in {label_file}, line {line_num + 1}"
+                            )
+                            continue
+
+                        # Extract x and y coordinates (assuming they alternate x,y,x,y...)
+                        if len(coords_float) % 2 != 0:
+                            print(
+                                f"Warning: Odd number of coordinates in {label_file}, line {line_num + 1}"
+                            )
+                            continue
+
+                        x_coords = coords_float[0::2]  # Every even index (0,2,4,...)
+                        y_coords = coords_float[1::2]  # Every odd index (1,3,5,...)
+
+                        # Calculate bounding box from polygon points
                         x_min, x_max = min(x_coords), max(x_coords)
                         y_min, y_max = min(y_coords), max(y_coords)
 
-                        # Convert to YOLO detection format
+                        # Convert to YOLO detection format (center_x, center_y, width, height)
                         width = x_max - x_min
                         height = y_max - y_min
                         center_x = x_min + width / 2
                         center_y = y_min + height / 2
 
+                        # Ensure coordinates are within [0,1] range
+                        center_x = max(0.0, min(1.0, center_x))
+                        center_y = max(0.0, min(1.0, center_y))
+                        width = max(0.0, min(1.0, width))
+                        height = max(0.0, min(1.0, height))
+
                         new_line = (
                             f"{class_id} {center_x:.6f} {center_y:.6f} {width:.6f} {height:.6f}\n"
                         )
                         new_lines.append(new_line)
-                        converted_count += 1
-                    else:
-                        # Already in detection format, keep as is
-                        new_lines.append(line)
 
-                if needs_conversion:
-                    # Write the converted file
+                    elif len(coords) == 4:
+                        # Already in detection format, keep as is
+                        new_lines.append(line + "\n")
+                    else:
+                        print(
+                            f"Warning: Unexpected coordinate count in {label_file}, line {line_num + 1}"
+                        )
+
+                # Write the processed file back
+                if new_lines:
                     with open(file_path, "w") as f:
                         f.writelines(new_lines)
-                    print(f"Converted {label_file}")
+                    files_processed += 1
 
-        print(f"Total annotations converted: {converted_count}")
+                    if file_converted:
+                        print(f"Converted segmentation annotations in: {label_file}")
+
+            except Exception as e:
+                print(f"Error processing {label_file}: {e}")
+
+        print(f"Files processed: {files_processed}")
+        print(f"Total segmentation annotations converted to detection: {converted_count}")
         return converted_count
+
+    def clean_dataset_format(self, dataset_path):
+        """Ensure all annotations are in proper detection format"""
+        print("Cleaning dataset format - converting all segmentation to detection...")
+
+        total_converted = 0
+
+        # Process all possible label directories
+        for split in ["train", "val", "valid", "test"]:
+            labels_dir = os.path.join(dataset_path, split, "labels")
+            if os.path.exists(labels_dir):
+                print(f"Processing {split} labels...")
+                converted = self.convert_segmentation_to_detection(labels_dir)
+                total_converted += converted
+                print(f"Converted {converted} annotations in {split} set")
+            else:
+                print(f"Labels directory not found: {labels_dir}")
+
+        print(f"Total annotations converted across all splits: {total_converted}")
+        return total_converted
 
     def download_and_extract_dataset(self, gdrive_file_id, output_filename=None):
         """Download dataset from Google Drive and extract"""
@@ -123,13 +195,9 @@ class PureYOLOv12FurnitureClassifier:
                 self.class_names = data_config.get("names", [])
                 print(f"Classes found: {self.class_names}")
 
-        # Convert segmentation annotations to detection format
-        print("Converting segmentation annotations to detection format...")
-        for split in ["train", "val"]:
-            labels_dir = os.path.join(dataset_path, split, "labels")
-            if os.path.exists(labels_dir):
-                converted = self.convert_segmentation_to_detection(labels_dir)
-                print(f"Converted {converted} annotations in {split} set")
+        # Clean dataset format first
+        print("Step 1: Cleaning dataset format...")
+        self.clean_dataset_format(dataset_path)
 
         all_images = []
         all_labels = []
@@ -137,13 +205,16 @@ class PureYOLOv12FurnitureClassifier:
         images_processed = 0
 
         # Process all splits (train and valid) together
-        for split in ["train", "val"]:
+        for split in ["train", "val", "valid"]:
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
             if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
-                print(f"Directory {split} not found")
+                print(f"Directory {split} not found, skipping...")
                 continue
+
+            print(f"Processing {split} split...")
+            split_elements = 0
 
             for img_file in os.listdir(images_dir):
                 if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -152,30 +223,56 @@ class PureYOLOv12FurnitureClassifier:
                     label_path = os.path.join(labels_dir, label_file)
 
                     if os.path.exists(label_path):
-                        with open(label_path, "r") as f:
-                            lines = f.readlines()
-                            elements_in_image = 0
+                        try:
+                            with open(label_path, "r") as f:
+                                lines = f.readlines()
+                                elements_in_image = 0
 
-                            # Process ALL lines (all elements in the image)
-                            for line in lines:
-                                if line.strip():
-                                    parts = line.strip().split()
-                                    if len(parts) >= 5:
-                                        class_id = int(parts[0])
+                                # Process ALL lines (all elements in the image)
+                                for line in lines:
+                                    line = line.strip()
+                                    if line:
+                                        parts = line.split()
+                                        if len(parts) == 5:  # Proper detection format
+                                            try:
+                                                class_id = int(parts[0])
 
-                                        # Verify valid class_id
-                                        if 0 <= class_id < len(self.class_names):
-                                            all_images.append(img_path)
-                                            all_labels.append(class_id)
-                                            elements_in_image += 1
-                                            total_elements += 1
+                                                # Verify valid class_id
+                                                if 0 <= class_id < len(self.class_names):
+                                                    all_images.append(img_path)
+                                                    all_labels.append(class_id)
+                                                    elements_in_image += 1
+                                                    total_elements += 1
+                                                    split_elements += 1
+                                                else:
+                                                    print(
+                                                        f"Warning: Invalid class_id {class_id} in {label_file}"
+                                                    )
+                                            except ValueError:
+                                                print(
+                                                    f"Warning: Invalid class_id format in {label_file}"
+                                                )
+                                        else:
+                                            print(
+                                                f"Warning: Unexpected format in {label_file}: {len(parts)} parts"
+                                            )
 
-                            if elements_in_image > 0:
-                                images_processed += 1
+                                if elements_in_image > 0:
+                                    images_processed += 1
 
+                        except Exception as e:
+                            print(f"Error reading {label_path}: {e}")
+
+            print(f"  {split} - Elements extracted: {split_elements}")
+
+        print(f"\nDataset Summary:")
         print(f"Images processed: {images_processed}")
         print(f"Total elements extracted: {total_elements}")
-        print(f"Average elements per image: {total_elements/images_processed:.2f}")
+        if images_processed > 0:
+            print(f"Average elements per image: {total_elements/images_processed:.2f}")
+
+        if total_elements == 0:
+            raise ValueError("No valid annotations found! Check your dataset format.")
 
         # Calculate class weights for balancing
         unique_labels = np.unique(all_labels)
@@ -189,7 +286,8 @@ class PureYOLOv12FurnitureClassifier:
                 if class_id < len(self.class_names)
                 else f"Unknown_{class_id}"
             )
-            print(f"  {class_name}: {weight:.3f}")
+            count = np.sum(np.array(all_labels) == class_id)
+            print(f"  {class_name}: {weight:.3f} (samples: {count})")
 
         # Split data 80/20
         train_images, val_images, train_labels, val_labels = train_test_split(
@@ -200,7 +298,9 @@ class PureYOLOv12FurnitureClassifier:
             stratify=all_labels,
         )
 
-        print(f"Training samples: {len(train_images)}, Validation samples: {len(val_images)}")
+        print(f"\nData split:")
+        print(f"Training samples: {len(train_images)}")
+        print(f"Validation samples: {len(val_images)}")
 
         # Show class distribution
         print(f"\nClass distribution in training:")
@@ -658,7 +758,7 @@ class PureYOLOv12FurnitureClassifier:
 
         results = self.model.predict(image_path, verbose=False)
 
-        if not results or len(results) > 0:
+        if not results or len(results) == 0:
             return None
 
         result = results[0]
@@ -709,7 +809,8 @@ class PureYOLOv12FurnitureClassifier:
                 "Top-1 and Top-3 accuracy metrics",
                 "Class balancing with weights",
                 "No image cropping (direct classification format)",
-                "Segmentation to detection conversion",
+                "Improved segmentation to detection conversion",
+                "Proper dataset format validation",
             ],
         }
 
@@ -745,6 +846,83 @@ class PureYOLOv12FurnitureClassifier:
             print(f"Error loading model: {e}")
             return False
 
+    def verify_dataset_format(self, dataset_path):
+        """Verify that dataset is in proper detection format"""
+        print("Verifying dataset format...")
+
+        issues_found = []
+        total_annotations = 0
+        valid_annotations = 0
+
+        for split in ["train", "val", "valid"]:
+            labels_dir = os.path.join(dataset_path, split, "labels")
+            if not os.path.exists(labels_dir):
+                continue
+
+            print(f"Checking {split} labels...")
+
+            for label_file in os.listdir(labels_dir):
+                if label_file.endswith(".txt"):
+                    file_path = os.path.join(labels_dir, label_file)
+
+                    try:
+                        with open(file_path, "r") as f:
+                            lines = f.readlines()
+
+                        for line_num, line in enumerate(lines):
+                            line = line.strip()
+                            if line:
+                                total_annotations += 1
+                                parts = line.split()
+
+                                if len(parts) == 5:
+                                    # Check if all values are valid
+                                    try:
+                                        class_id = int(parts[0])
+                                        coords = [float(x) for x in parts[1:]]
+
+                                        # Check coordinate ranges
+                                        if all(0.0 <= coord <= 1.0 for coord in coords):
+                                            valid_annotations += 1
+                                        else:
+                                            issues_found.append(
+                                                f"{label_file}:{line_num+1} - Coordinates out of range"
+                                            )
+
+                                    except ValueError:
+                                        issues_found.append(
+                                            f"{label_file}:{line_num+1} - Invalid numeric values"
+                                        )
+
+                                elif len(parts) > 5:
+                                    issues_found.append(
+                                        f"{label_file}:{line_num+1} - Still in segmentation format"
+                                    )
+
+                                else:
+                                    issues_found.append(
+                                        f"{label_file}:{line_num+1} - Invalid format"
+                                    )
+
+                    except Exception as e:
+                        issues_found.append(f"{label_file} - Error reading file: {e}")
+
+        print(f"Dataset Format Verification Results:")
+        print(f"Total annotations: {total_annotations}")
+        print(f"Valid annotations: {valid_annotations}")
+        print(f"Issues found: {len(issues_found)}")
+
+        if issues_found:
+            print(f"First 10 issues:")
+            for issue in issues_found[:10]:
+                print(f"  - {issue}")
+            if len(issues_found) > 10:
+                print(f"  ... and {len(issues_found) - 10} more issues")
+        else:
+            print("All annotations are in proper detection format!")
+
+        return len(issues_found) == 0
+
 
 def main():
     """Main training pipeline for pure YOLOv12 classification"""
@@ -761,6 +939,14 @@ def main():
     (train_images, train_labels), (val_images, val_labels) = (
         classifier.prepare_classification_dataset(dataset_path, train_split=0.8)
     )
+
+    # Verify dataset format after conversion
+    print("\nStep 2.1: Verifying dataset format...")
+    is_format_correct = classifier.verify_dataset_format(dataset_path)
+    if not is_format_correct:
+        print("Warning: Dataset format issues detected. Training may encounter problems.")
+    else:
+        print("Dataset format verification passed!")
 
     # Initialize model
     print("\nStep 3: Initializing YOLOv12 model...")
@@ -799,7 +985,9 @@ def main():
     print("✓ Top-1 and Top-3 accuracy metrics")
     print("✓ No image cropping (direct classification)")
     print("✓ Class balancing with weights")
-    print("✓ Segmentation to detection conversion")
+    print("✓ Improved segmentation to detection conversion")
+    print("✓ Dataset format validation")
+    print("✓ Better error handling and logging")
     print("\nFiles created:")
     print("- Best model: training/weights/best.pt")
     print("- Last model: training/weights/last.pt")
