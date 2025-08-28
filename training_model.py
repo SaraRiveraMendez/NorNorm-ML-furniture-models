@@ -164,28 +164,62 @@ class PureYOLOv12FurnitureClassifier:
 
         return (train_images, train_labels), (val_images, val_labels)
 
-    def _show_dataset_statistics(self, train_samples, val_samples):
-        """Show dataset statistics"""
-        print(f"\nDataset Statistics:")
-        print(f"{'='*50}")
-        print(f"{'Class':<20} {'Train':<10} {'Val':<10} {'Total':<10}")
-        print(f"{'='*50}")
+    def convert_segmentation_to_detection(label_dir):
+        """Convert any segmentation annotations to detection by creating bounding boxes"""
+        converted_count = 0
 
-        total_train = 0
-        total_val = 0
+        for label_file in os.listdir(label_dir):
+            if label_file.endswith(".txt"):
+                file_path = os.path.join(label_dir, label_file)
+                new_lines = []
+                needs_conversion = False
 
-        for class_name in self.class_names:
-            train_count = train_samples.get(class_name, 0)
-            val_count = val_samples.get(class_name, 0)
-            total_count = train_count + val_count
+                with open(file_path, "r") as f:
+                    lines = f.readlines()
 
-            print(f"{class_name:<20} {train_count:<10} {val_count:<10} {total_count:<10}")
-            total_train += train_count
-            total_val += val_count
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) > 5:  # This is segmentation
+                        needs_conversion = True
+                        # Convert segmentation points to bounding box
+                        class_id = parts[0]
+                        points = list(map(float, parts[1:]))
 
-        print(f"{'='*50}")
-        print(f"{'TOTAL':<20} {total_train:<10} {total_val:<10} {total_train + total_val:<10}")
-        print(f"{'='*50}")
+                        # Get all x and y coordinates
+                        x_coords = points[0::2]  # x values
+                        y_coords = points[1::2]  # y values
+
+                        # Calculate bounding box coordinates
+                        x_min, x_max = min(x_coords), max(x_coords)
+                        y_min, y_max = min(y_coords), max(y_coords)
+
+                        # Convert to YOLO detection format
+                        width = x_max - x_min
+                        height = y_max - y_min
+                        center_x = x_min + width / 2
+                        center_y = y_min + height / 2
+
+                        new_line = (
+                            f"{class_id} {center_x:.6f} {center_y:.6f} {width:.6f} {height:.6f}\n"
+                        )
+                        new_lines.append(new_line)
+                        converted_count += 1
+                    else:
+                        # Already in detection format, keep as is
+                        new_lines.append(line)
+
+                if needs_conversion:
+                    # Write the converted file
+                    with open(file_path, "w") as f:
+                        f.writelines(new_lines)
+                    print(f"Converted {label_file}")
+
+        print(f"Total annotations converted: {converted_count}")
+
+    # Ejecutar la conversión
+    print("Converting segmentation to detection...")
+    convert_segmentation_to_detection("dataset/labels/train")
+    convert_segmentation_to_detection("dataset/labels/val")
 
     def initialize_yolov12_classifier(self):
         """Initialize YOLOv12 model for classification"""
@@ -362,7 +396,7 @@ class PureYOLOv12FurnitureClassifier:
         """Calculate Top-K accuracy metrics"""
         print(f"Calculating Top-K accuracy for k={k_values}...")
 
-        val_path = os.path.join(dataset_path, "val")
+        val_path = os.path.join(dataset_path, "valid")
         y_true = []
         y_pred_probs = []
 
@@ -397,9 +431,13 @@ class PureYOLOv12FurnitureClassifier:
         top_k_accuracies = {}
         for k in k_values:
             if k <= len(self.class_names):
-                acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
-                top_k_accuracies[f"top_{k}_accuracy"] = acc
-                print(f"Top-{k} Accuracy: {acc:.4f}")
+                try:
+                    acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
+                    top_k_accuracies[f"top_{k}_accuracy"] = acc
+                    print(f"Top-{k} Accuracy: {acc:.4f}")
+                except Exception as e:
+                    print(f"Error calculating Top-{k} accuracy: {e}")
+                    top_k_accuracies[f"top_{k}_accuracy"] = 0.0
 
         return top_k_accuracies
 
@@ -423,8 +461,20 @@ class PureYOLOv12FurnitureClassifier:
         validation_results = {"standard_metrics": results, "top_k_metrics": top_k_metrics}
 
         print("Validation completed!")
-        print(f"Top-1 Accuracy: {top_k_metrics.get('top_1_accuracy', 'N/A'):.4f}")
-        print(f"Top-3 Accuracy: {top_k_metrics.get('top_3_accuracy', 'N/A'):.4f}")
+
+        # Safely print Top-K accuracies
+        top1_acc = top_k_metrics.get("top_1_accuracy")
+        top3_acc = top_k_metrics.get("top_3_accuracy")
+
+        if top1_acc is not None:
+            print(f"Top-1 Accuracy: {top1_acc:.4f}")
+        else:
+            print("Top-1 Accuracy: N/A")
+
+        if top3_acc is not None:
+            print(f"Top-3 Accuracy: {top3_acc:.4f}")
+        else:
+            print("Top-3 Accuracy: N/A")
 
         return validation_results
 
@@ -467,12 +517,16 @@ class PureYOLOv12FurnitureClassifier:
 
         # Calculate Top-K accuracies
         top_k_metrics = {}
-        if y_pred_probs:
+        if y_pred_probs and len(y_pred_probs) > 0:
             y_pred_probs = np.array(y_pred_probs)
             for k in [1, 3]:
                 if k <= len(self.class_names):
-                    acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
-                    top_k_metrics[f"top_{k}_accuracy"] = acc
+                    try:
+                        acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
+                        top_k_metrics[f"top_{k}_accuracy"] = acc
+                    except Exception as e:
+                        print(f"Error calculating Top-{k} accuracy: {e}")
+                        top_k_metrics[f"top_{k}_accuracy"] = 0.0
 
         # Create confusion matrix
         cm = confusion_matrix(y_true, y_pred)
