@@ -24,7 +24,7 @@ from ultralytics import YOLO
 
 
 class PureYOLOv12FurnitureClassifier:
-    def __init__(self, model_size="n", img_size=640, batch_size=16):
+    def __init__(self, model_size="s", img_size=640, batch_size=16):
         self.model_size = model_size
         self.img_size = img_size
         self.batch_size = batch_size
@@ -351,7 +351,7 @@ class PureYOLOv12FurnitureClassifier:
     def initialize_yolov12_classifier(self):
         """Initialize YOLOv12 model for classification"""
         try:
-            model_name = f"yolo12{self.model_size}-cls.pt"
+            model_name = f"yolo12{self.model_size}-cls.yaml"
             self.model = YOLO(model_name)
             print(f"YOLOv12{self.model_size} Classification model initialized successfully")
 
@@ -494,7 +494,7 @@ class PureYOLOv12FurnitureClassifier:
             batch=self.batch_size,
             device="cpu",
             workers=8,
-            patience=25,
+            patience=20,
             save=True,
             save_period=10,
             val=True,
@@ -502,7 +502,7 @@ class PureYOLOv12FurnitureClassifier:
             name="training",
             exist_ok=True,
             pretrained=True,
-            optimizer="AdamW",
+            optimizer="RepOptimizer",
             lr0=5e-4,
             lrf=0.01,
             momentum=0.937,
@@ -927,11 +927,11 @@ class PureYOLOv12FurnitureClassifier:
 def main():
     """Main training pipeline for pure YOLOv12 classification"""
     # Initialize classifier
-    classifier = PureYOLOv12FurnitureClassifier(model_size="n", img_size=640, batch_size=16)
+    classifier = PureYOLOv12FurnitureClassifier(model_size="s", img_size=640, batch_size=16)
 
     # Download and prepare dataset
     print("Step 1: Downloading dataset...")
-    gdrive_file_id = "1Yyp12TpZY8OggZVmkU6JrokJm3xIzQto"
+    gdrive_file_id = "1LVZdiClbXwOzfKug2PZKxTdAEIvYYhWo"
     dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
     # Prepare classification dataset (no cropping needed)
