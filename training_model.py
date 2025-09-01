@@ -24,7 +24,7 @@ from ultralytics import YOLO
 
 
 class PureYOLOv12FurnitureClassifier:
-    def __init__(self, model_size="s", img_size=640, batch_size=16):
+    def __init__(self, model_size="n", img_size=640, batch_size=16):
         self.model_size = model_size
         self.img_size = img_size
         self.batch_size = batch_size
@@ -927,7 +927,7 @@ class PureYOLOv12FurnitureClassifier:
 def main():
     """Main training pipeline for pure YOLOv12 classification"""
     # Initialize classifier
-    classifier = PureYOLOv12FurnitureClassifier(model_size="s", img_size=640, batch_size=16)
+    classifier = PureYOLOv12FurnitureClassifier(model_size="n", img_size=640, batch_size=16)
 
     # Download and prepare dataset
     print("Step 1: Downloading dataset...")
