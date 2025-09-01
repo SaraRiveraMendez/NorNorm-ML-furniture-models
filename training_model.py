@@ -275,7 +275,7 @@ class PureYOLOv12FurnitureClassifier:
             print(f"Error initializing YOLOv12 classifier: {e}")
             try:
                 # Fallback to regular YOLOv12 and modify for classification
-                model_name = f"yolo12{self.model_size}.yaml"
+                model_name = f"yolo12{self.model_size}.pt"
                 self.model = YOLO(model_name)
                 print(
                     f"Using YOLOv12{self.model_size} detection model (will be adapted for classification)"
