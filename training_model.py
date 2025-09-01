@@ -502,7 +502,7 @@ class PureYOLOv12FurnitureClassifier:
             name="training",
             exist_ok=True,
             pretrained=True,
-            optimizer="RepOptimizer",
+            optimizer="RMSProp",
             lr0=5e-4,
             lrf=0.01,
             momentum=0.937,
