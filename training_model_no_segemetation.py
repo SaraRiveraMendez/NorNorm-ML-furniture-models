@@ -671,7 +671,7 @@ def main():
 
     # Download and prepare dataset
     print("Step 1: Downloading dataset...")
-    gdrive_file_id = "1Yyp12TpZY8OggZVmkU6JrokJm3xIzQto"
+    gdrive_file_id = "1DjNhyBMEcnuF-jpgUdBuJxjRmWHSNIwu"
     dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
     # Prepare classification dataset (no cropping needed)
