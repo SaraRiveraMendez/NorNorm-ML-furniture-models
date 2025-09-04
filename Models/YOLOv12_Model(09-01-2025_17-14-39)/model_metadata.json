@@ -1,0 +1,18 @@
+{
+  "model_type": "Pure YOLOv12n Classifier",
+  "class_names": [
+    "LOUNGE",
+    "MEETING-TABLE",
+    "PHONEBOOTH",
+    "PLANTS",
+    "PRIVATE-DESK",
+    "REST-FOR-1",
+    "REST-FOR-2",
+    "ROUND-TABLE",
+    "STORAGE"
+  ],
+  "img_size": 640,
+  "batch_size": 8,
+  "num_classes": 9,
+  "class_weights": {
+    
