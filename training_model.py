@@ -23,7 +23,7 @@ from sklearn.utils.class_weight import compute_class_weight
 from ultralytics import YOLO
 
 
-class PureYOLOv12FurnitureClassifier:
+class ImprovedYOLOv12Classifier:
     def __init__(self, model_size="n", img_size=640, batch_size=16):
         self.model_size = model_size
         self.img_size = img_size
@@ -31,1141 +31,648 @@ class PureYOLOv12FurnitureClassifier:
         self.model = None
         self.class_names = []
         self.class_weights = None
-        self.progressive_unfreeze_schedule = []
 
-        # Create folder with timestamp for this training session
+        # Create folder with timestamp
         timestamp = datetime.datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-        self.save_dir = f"Models/YOLOv12_Model({timestamp})"
+        self.save_dir = f"Models/ImprovedYOLOv12_Model({timestamp})"
         os.makedirs(self.save_dir, exist_ok=True)
         print(f"Save directory created: {self.save_dir}")
 
-    def validate_and_fix_class_ids(self, label_dir, max_class_id=None):
-        """Validate and fix class IDs in annotation files"""
-        print(f"Validating class IDs in: {label_dir}")
+    def clean_and_extract_objects(self, dataset_path, min_area=0.005, max_samples_per_class=5000):
+        """Extract objects from detection data and create proper classification structure"""
+        print("Extracting and cleaning objects from detection annotations...")
 
-        if not os.path.exists(label_dir):
-            print(f"Label directory does not exist: {label_dir}")
-            return set()
-
-        found_class_ids = set()
-        fixed_files = 0
-
-        for label_file in os.listdir(label_dir):
-            if not label_file.endswith(".txt"):
-                continue
-
-            file_path = os.path.join(label_dir, label_file)
-            lines_to_write = []
-            file_modified = False
-
-            try:
-                with open(file_path, "r") as f:
-                    lines = f.readlines()
-
-                for line_num, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    parts = line.split()
-                    if len(parts) < 5:
-                        print(f"Warning: Invalid annotation in {label_file}, line {line_num + 1}")
-                        continue
-
-                    try:
-                        class_id = int(parts[0])
-
-                        # Fix class ID if it's out of bounds
-                        if max_class_id is not None and class_id >= max_class_id:
-                            print(
-                                f"Warning: Class ID {class_id} >= {max_class_id} in {label_file}, capping to {max_class_id-1}"
-                            )
-                            class_id = max_class_id - 1
-                            parts[0] = str(class_id)
-                            file_modified = True
-
-                        found_class_ids.add(class_id)
-                        lines_to_write.append(" ".join(parts) + "\n")
-
-                    except ValueError:
-                        print(f"Warning: Invalid class ID in {label_file}, line {line_num + 1}")
-                        continue
-
-                # Write back if modified
-                if file_modified:
-                    with open(file_path, "w") as f:
-                        f.writelines(lines_to_write)
-                    fixed_files += 1
-
-            except Exception as e:
-                print(f"Error processing {label_file}: {e}")
-
-        print(f"Found class IDs: {sorted(found_class_ids)}")
-        print(f"Fixed {fixed_files} files with out-of-bounds class IDs")
-        return found_class_ids
-
-    def convert_segmentation_to_detection(self, label_dir):
-        """Convert segmentation annotations to detection format properly with class ID validation"""
-        converted_count = 0
-        files_processed = 0
-
-        print(f"Processing label directory: {label_dir}")
-
-        if not os.path.exists(label_dir):
-            print(f"Label directory does not exist: {label_dir}")
-            return 0
-
-        label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
-        print(f"Found {len(label_files)} label files to process")
-
-        for label_file in label_files:
-            file_path = os.path.join(label_dir, label_file)
-            new_lines = []
-            file_converted = False
-
-            try:
-                with open(file_path, "r") as f:
-                    lines = f.readlines()
-
-                for line_num, line in enumerate(lines):
-                    line = line.strip()
-                    if not line:
-                        continue
-
-                    parts = line.split()
-                    if len(parts) < 5:
-                        print(f"Warning: Invalid annotation in {label_file}, line {line_num + 1}")
-                        continue
-
-                    try:
-                        class_id = int(parts[0])
-                        # Validate class_id is within expected range
-                        if len(self.class_names) > 0 and class_id >= len(self.class_names):
-                            print(
-                                f"Warning: Class ID {class_id} >= num_classes {len(self.class_names)} in {label_file}"
-                            )
-                            class_id = min(
-                                class_id, len(self.class_names) - 1
-                            )  # Cap to max valid class
-
-                    except ValueError:
-                        print(
-                            f"Warning: Invalid class ID format in {label_file}, line {line_num + 1}"
-                        )
-                        continue
-
-                    coords = parts[1:]
-
-                    # Check if this is segmentation format (more than 4 coordinates)
-                    if len(coords) > 4:
-                        file_converted = True
-                        converted_count += 1
-
-                        # Convert string coordinates to floats
-                        try:
-                            coords_float = [float(x) for x in coords]
-                        except ValueError:
-                            print(
-                                f"Warning: Invalid coordinates in {label_file}, line {line_num + 1}"
-                            )
-                            continue
-
-                        # Extract x and y coordinates (assuming they alternate x,y,x,y...)
-                        if len(coords_float) % 2 != 0:
-                            print(
-                                f"Warning: Odd number of coordinates in {label_file}, line {line_num + 1}"
-                            )
-                            continue
-
-                        x_coords = coords_float[0::2]  # Every even index (0,2,4,...)
-                        y_coords = coords_float[1::2]  # Every odd index (1,3,5,...)
-
-                        # Calculate bounding box from polygon points
-                        x_min, x_max = min(x_coords), max(x_coords)
-                        y_min, y_max = min(y_coords), max(y_coords)
-
-                        # Convert to YOLO detection format (center_x, center_y, width, height)
-                        width = x_max - x_min
-                        height = y_max - y_min
-                        center_x = x_min + width / 2
-                        center_y = y_min + height / 2
-
-                        # Ensure coordinates are within [0,1] range
-                        center_x = max(0.0, min(1.0, center_x))
-                        center_y = max(0.0, min(1.0, center_y))
-                        width = max(0.0, min(1.0, width))
-                        height = max(0.0, min(1.0, height))
-
-                        new_line = (
-                            f"{class_id} {center_x:.6f} {center_y:.6f} {width:.6f} {height:.6f}\n"
-                        )
-                        new_lines.append(new_line)
-
-                    elif len(coords) == 4:
-                        # Already in detection format, keep as is but validate class_id
-                        new_line = f"{class_id} {' '.join(coords)}\n"
-                        new_lines.append(new_line)
-                    else:
-                        print(
-                            f"Warning: Unexpected coordinate count in {label_file}, line {line_num + 1}"
-                        )
-
-                # Write the processed file back
-                if new_lines:
-                    with open(file_path, "w") as f:
-                        f.writelines(new_lines)
-                    files_processed += 1
-
-                    if file_converted:
-                        print(f"Converted segmentation annotations in: {label_file}")
-
-            except Exception as e:
-                print(f"Error processing {label_file}: {e}")
-
-        print(f"Files processed: {files_processed}")
-        print(f"Total segmentation annotations converted to detection: {converted_count}")
-        return converted_count
-
-    def clean_dataset_format(self, dataset_path):
-        """Ensure all annotations are in proper detection format with class ID validation"""
-        print("Cleaning dataset format - converting all segmentation to detection...")
-
-        total_converted = 0
-        all_class_ids = set()
-
-        # First pass: collect all class IDs and validate
-        for split in ["train", "val", "valid", "test"]:
-            labels_dir = os.path.join(dataset_path, split, "labels")
-            if os.path.exists(labels_dir):
-                found_ids = self.validate_and_fix_class_ids(
-                    labels_dir, len(self.class_names) if self.class_names else None
-                )
-                all_class_ids.update(found_ids)
-
-        print(f"All class IDs found in dataset: {sorted(all_class_ids)}")
-
-        # Check for class ID consistency
-        if self.class_names and all_class_ids:
-            max_found_id = max(all_class_ids)
-            expected_max_id = len(self.class_names) - 1
-
-            if max_found_id > expected_max_id:
-                print(
-                    f"ERROR: Found class ID {max_found_id} but only {len(self.class_names)} classes defined!"
-                )
-                print("This will cause the IndexError you're experiencing.")
-
-                # Fix by capping class IDs
-                for split in ["train", "val", "valid", "test"]:
-                    labels_dir = os.path.join(dataset_path, split, "labels")
-                    if os.path.exists(labels_dir):
-                        self.validate_and_fix_class_ids(labels_dir, len(self.class_names))
-
-        # Second pass: convert segmentation to detection
-        for split in ["train", "val", "valid", "test"]:
-            labels_dir = os.path.join(dataset_path, split, "labels")
-            if os.path.exists(labels_dir):
-                print(f"Processing {split} labels...")
-                converted = self.convert_segmentation_to_detection(labels_dir)
-                total_converted += converted
-                print(f"Converted {converted} annotations in {split} set")
-            else:
-                print(f"Labels directory not found: {labels_dir}")
-
-        print(f"Total annotations converted across all splits: {total_converted}")
-        return total_converted
-
-    def download_and_extract_dataset(self, gdrive_file_id, output_filename=None):
-        """Download dataset from Google Drive and extract"""
-        import tempfile
-
-        if output_filename is None:
-            output_filename = f"dataset_{gdrive_file_id}.zip"
-
-        url = f"https://drive.google.com/uc?id={gdrive_file_id}"
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_zip_path = os.path.join(temp_dir, output_filename)
-
-            print("Downloading dataset from Google Drive...")
-            gdown.download(url, temp_zip_path, quiet=False)
-
-            extract_path = "dataset/"
-            print("Extracting dataset...")
-            with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
-                zip_ref.extractall(extract_path)
-
-        return extract_path
-
-    def prepare_classification_dataset(self, dataset_path, train_split=0.8):
-        """Extract ALL elements from images and split into train/validation 80/20"""
-        # First, load class names from yaml
+        # Load class names and remove background if present
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
                 data_config = yaml.safe_load(f)
                 self.class_names = data_config.get("names", [])
-                print(f"Classes found: {self.class_names}")
-                print(f"Number of classes: {len(self.class_names)}")
-        else:
-            print("Warning: data.yaml not found, class names may not be properly set")
 
-        # Clean dataset format with class validation
-        print("Step 1: Cleaning dataset format with class validation...")
-        self.clean_dataset_format(dataset_path)
+        # Filter out background class - this is critical for your accuracy issue
+        original_names = self.class_names.copy()
+        self.class_names = [
+            name for name in self.class_names if name.lower() not in ["background", "bg"]
+        ]
 
-        all_images = []
-        all_labels = []
-        total_elements = 0
-        images_processed = 0
+        if len(self.class_names) < len(original_names):
+            print(
+                f"Removed background class(es). Classes: {len(original_names)} -> {len(self.class_names)}"
+            )
 
-        # Process all splits (train and valid) together
+        print(f"Target furniture classes: {self.class_names}")
+
+        # Create classification directory structure
+        classification_dir = os.path.join(self.save_dir, "classification_dataset")
+        for split in ["train", "val"]:
+            for class_name in self.class_names:
+                os.makedirs(os.path.join(classification_dir, split, class_name), exist_ok=True)
+
+        total_extracted = 0
+        class_counts = {name: 0 for name in self.class_names}
+
+        # Process all splits
         for split in ["train", "val", "valid"]:
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
             if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
-                print(f"Directory {split} not found, skipping...")
                 continue
 
             print(f"Processing {split} split...")
-            split_elements = 0
 
             for img_file in os.listdir(images_dir):
-                if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                    img_path = os.path.join(images_dir, img_file)
-                    label_file = os.path.splitext(img_file)[0] + ".txt"
-                    label_path = os.path.join(labels_dir, label_file)
+                if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                    continue
 
-                    if os.path.exists(label_path):
-                        try:
-                            with open(label_path, "r") as f:
-                                lines = f.readlines()
-                                elements_in_image = 0
+                img_path = os.path.join(images_dir, img_file)
+                label_file = os.path.splitext(img_file)[0] + ".txt"
+                label_path = os.path.join(labels_dir, label_file)
 
-                                # Process ALL lines (all elements in the image)
-                                for line in lines:
-                                    line = line.strip()
-                                    if line:
-                                        parts = line.split()
-                                        if len(parts) == 5:  # Proper detection format
-                                            try:
-                                                class_id = int(parts[0])
+                if not os.path.exists(label_path):
+                    continue
 
-                                                # Verify valid class_id
-                                                if 0 <= class_id < len(self.class_names):
-                                                    all_images.append(img_path)
-                                                    all_labels.append(class_id)
-                                                    elements_in_image += 1
-                                                    total_elements += 1
-                                                    split_elements += 1
-                                                else:
-                                                    print(
-                                                        f"ERROR: Invalid class_id {class_id} in {label_file} (max allowed: {len(self.class_names)-1})"
-                                                    )
-                                            except ValueError:
-                                                print(
-                                                    f"Warning: Invalid class_id format in {label_file}"
-                                                )
-                                        else:
-                                            print(
-                                                f"Warning: Unexpected format in {label_file}: {len(parts)} parts"
-                                            )
+                # Load image
+                image = cv2.imread(img_path)
+                if image is None:
+                    continue
+                h, w = image.shape[:2]
 
-                                if elements_in_image > 0:
-                                    images_processed += 1
+                try:
+                    with open(label_path, "r") as f:
+                        lines = f.readlines()
 
-                        except Exception as e:
-                            print(f"Error reading {label_path}: {e}")
+                    object_count = 0
+                    for line in lines:
+                        parts = line.strip().split()
+                        if len(parts) != 5:
+                            continue
 
-            print(f"  {split} - Elements extracted: {split_elements}")
+                        class_id = int(parts[0])
 
-        print(f"\nDataset Summary:")
-        print(f"Images processed: {images_processed}")
-        print(f"Total elements extracted: {total_elements}")
-        if images_processed > 0:
-            print(f"Average elements per image: {total_elements/images_processed:.2f}")
+                        # Map to new class indices (without background)
+                        if class_id >= len(original_names):
+                            continue
 
-        if total_elements == 0:
-            raise ValueError("No valid annotations found! Check your dataset format.")
+                        original_class_name = original_names[class_id]
+                        if original_class_name.lower() in ["background", "bg"]:
+                            continue  # Skip background
 
-        # Validate that all labels are within expected range
-        unique_labels = np.unique(all_labels)
-        print(f"Unique class IDs in processed data: {unique_labels}")
+                        if original_class_name not in self.class_names:
+                            continue
 
-        if len(self.class_names) > 0:
-            invalid_labels = [label for label in unique_labels if label >= len(self.class_names)]
-            if invalid_labels:
-                raise ValueError(
-                    f"Found invalid class IDs {invalid_labels} but only {len(self.class_names)} classes defined!"
-                )
+                        # Check if we have enough samples for this class
+                        if class_counts[original_class_name] >= max_samples_per_class:
+                            continue
 
-        # Calculate class weights for balancing
-        class_weights_array = compute_class_weight("balanced", classes=unique_labels, y=all_labels)
-        self.class_weights = dict(zip(unique_labels, class_weights_array))
+                        # Parse bounding box
+                        cx, cy, bw, bh = map(float, parts[1:])
 
-        print(f"\nClass weights calculated for balancing:")
-        for class_id, weight in self.class_weights.items():
-            class_name = (
-                self.class_names[class_id]
-                if class_id < len(self.class_names)
-                else f"Unknown_{class_id}"
-            )
-            count = np.sum(np.array(all_labels) == class_id)
-            print(f"  {class_name}: {weight:.3f} (samples: {count})")
+                        # Filter very small objects
+                        if bw * bh < min_area:
+                            continue
 
-        # Split data 80/20
-        train_images, val_images, train_labels, val_labels = train_test_split(
-            all_images,
-            all_labels,
-            test_size=(1 - train_split),
-            random_state=42,
-            stratify=all_labels,
-        )
+                        # Add padding to bounding box for better context
+                        padding = 0.1  # 10% padding
+                        bw_padded = min(1.0, bw * (1 + padding))
+                        bh_padded = min(1.0, bh * (1 + padding))
 
-        print(f"\nData split:")
-        print(f"Training samples: {len(train_images)}")
-        print(f"Validation samples: {len(val_images)}")
+                        # Convert to pixel coordinates
+                        x1 = int(max(0, (cx - bw_padded / 2) * w))
+                        y1 = int(max(0, (cy - bh_padded / 2) * h))
+                        x2 = int(min(w, (cx + bw_padded / 2) * w))
+                        y2 = int(min(h, (cy + bh_padded / 2) * h))
 
-        # Show class distribution
-        print(f"\nClass distribution in training:")
-        unique, counts = np.unique(train_labels, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            class_name = (
-                self.class_names[class_id]
-                if class_id < len(self.class_names)
-                else f"Unknown_{class_id}"
-            )
-            print(f"  {class_name}: {count} samples")
+                        # Skip invalid boxes
+                        if x2 <= x1 or y2 <= y1 or (x2 - x1) < 20 or (y2 - y1) < 20:
+                            continue
 
-        print(f"\nClass distribution in validation:")
-        unique, counts = np.unique(val_labels, return_counts=True)
-        for class_id, count in zip(unique, counts):
-            class_name = (
-                self.class_names[class_id]
-                if class_id < len(self.class_names)
-                else f"Unknown_{class_id}"
-            )
-            print(f"  {class_name}: {count} samples")
+                        # Crop and resize object
+                        cropped = image[y1:y2, x1:x2]
 
-        return (train_images, train_labels), (val_images, val_labels)
+                        # Resize to fixed size for consistency
+                        cropped_resized = cv2.resize(cropped, (224, 224))
 
-    def create_yolo_classification_config(self, dataset_path):
-        """Create YOLO classification configuration with proper class count"""
+                        # Determine target split (80% train, 20% val)
+                        target_split = "train" if np.random.random() < 0.8 else "val"
+
+                        # Save cropped object
+                        save_filename = f"{os.path.splitext(img_file)[0]}_obj{object_count}.jpg"
+                        save_path = os.path.join(
+                            classification_dir, target_split, original_class_name, save_filename
+                        )
+
+                        cv2.imwrite(save_path, cropped_resized)
+
+                        class_counts[original_class_name] += 1
+                        total_extracted += 1
+                        object_count += 1
+
+                except Exception as e:
+                    print(f"Error processing {img_path}: {e}")
+                    continue
+
+        print(f"\nObject extraction summary:")
+        print(f"Total objects extracted: {total_extracted}")
+        for class_name, count in class_counts.items():
+            print(f"  {class_name}: {count} objects")
+
+        # Calculate class distribution and weights
+        all_counts = list(class_counts.values())
+        if len(all_counts) > 0 and min(all_counts) > 0:
+            # Calculate inverse frequency weights
+            total_samples = sum(all_counts)
+            weights = {}
+            for class_name, count in class_counts.items():
+                weights[class_name] = total_samples / (len(self.class_names) * count)
+
+            print(f"\nCalculated class weights:")
+            for class_name, weight in weights.items():
+                print(f"  {class_name}: {weight:.3f}")
+
+        return classification_dir
+
+    def create_yolo_classification_config(self, classification_dir):
+        """Create YOLO classification configuration"""
         config = {
-            "path": os.path.abspath(dataset_path),
+            "path": os.path.abspath(classification_dir),
             "train": "train",
-            "val": "valid",
-            "nc": len(self.class_names),  # Explicitly set number of classes
-            "names": {i: name for i, name in enumerate(self.class_names)},
+            "val": "val",
+            "nc": len(self.class_names),
+            "names": self.class_names,  # Direct list instead of dict
         }
 
-        config_path = os.path.join(dataset_path, "dataset.yaml")
+        config_path = os.path.join(classification_dir, "dataset.yaml")
         with open(config_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
 
-        print(f"YOLO classification config saved to: {config_path}")
-        print(f"Number of classes configured: {len(self.class_names)}")
+        print(f"YOLO classification config saved: {config_path}")
+        print(f"Number of classes: {len(self.class_names)}")
+
         return config_path
 
-    def initialize_yolov12_classifier(self):
-        """Initialize YOLOv12 model for classification"""
+    def initialize_model(self):
+        """Initialize YOLOv12 classification model"""
         try:
+            # Try classification model first
             model_name = f"yolo12{self.model_size}-cls.pt"
             self.model = YOLO(model_name)
-            print(f"YOLOv12{self.model_size} Classification model initialized successfully")
-
-            # Setup progressive unfreezing schedule
-            self._setup_progressive_unfreeze()
-
+            print(f"YOLOv12{self.model_size} classification model loaded")
             return True
-        except Exception as e:
-            print(f"Error initializing YOLOv12 classifier: {e}")
+        except:
             try:
-                # Fallback to regular YOLOv12 and modify for classification
+                # Fallback to detection model
                 model_name = f"yolo12{self.model_size}.pt"
                 self.model = YOLO(model_name)
                 print(
-                    f"Using YOLOv12{self.model_size} detection model (will be adapted for classification)"
+                    f"YOLOv12{self.model_size} detection model loaded (will adapt for classification)"
                 )
-
-                # Setup progressive unfreezing schedule
-                self._setup_progressive_unfreeze()
-
                 return True
-            except Exception as e2:
-                print(f"Error with fallback model: {e2}")
+            except Exception as e:
+                print(f"Error loading model: {e}")
                 return False
 
-    def _setup_progressive_unfreeze(self):
-        """Setup progressive unfreezing schedule"""
-        # Define unfreezing schedule (layer groups to unfreeze at specific epochs)
-        self.progressive_unfreeze_schedule = [
+    def freeze_layers(self, model, freeze_backbone=True, freeze_neck=False):
+        """Congelar capas específicas del modelo"""
+        if not hasattr(model, "model"):
+            return
+
+        model_layers = model.model
+
+        # Congelar backbone (primeras capas)
+        if freeze_backbone:
+            for i, layer in enumerate(model_layers):
+                if i < len(model_layers) * 0.7:  # Congela el 70% inicial del modelo
+                    for param in layer.parameters():
+                        param.requires_grad = False
+                    print(f"Frozen layer {i}")
+
+        # Congelar neck (capas intermedias) si se especifica
+        if freeze_neck:
+            for i, layer in enumerate(model_layers):
+                if len(model_layers) * 0.7 <= i < len(model_layers) * 0.9:
+                    for param in layer.parameters():
+                        param.requires_grad = False
+                    print(f"Frozen neck layer {i}")
+
+    def unfreeze_layers(self, model, unfreeze_from_layer=0):
+        """Descongelar capas desde una capa específica"""
+        if not hasattr(model, "model"):
+            return
+
+        model_layers = model.model
+
+        for i, layer in enumerate(model_layers):
+            if i >= unfreeze_from_layer:
+                for param in layer.parameters():
+                    param.requires_grad = True
+                print(f"Unfrozen layer {i}")
+
+    def train_with_progressive_unfreezing(self, config_path, total_epochs=80):
+        """Entrenamiento con descongelamiento progresivo"""
+        print(f"Starting progressive unfreezing training...")
+        print(f"Classes: {len(self.class_names)}")
+        print(f"Total epochs: {total_epochs}")
+
+        # Definir las fases de descongelamiento
+        phases = [
             {
-                "epoch": 0,
+                "name": "Phase 1: Frozen Backbone",
+                "epochs": total_epochs // 3,
                 "freeze_backbone": True,
-                "description": "Freeze backbone, train classifier head only",
+                "freeze_neck": False,
+                "lr": 0.001,
+                "description": "Solo entrenar cabezal de clasificación",
             },
             {
-                "epoch": 20,
+                "name": "Phase 2: Partial Unfreezing",
+                "epochs": total_epochs // 3,
                 "freeze_backbone": False,
-                "unfreeze_layers": ["model.22", "model.21"],
-                "description": "Unfreeze last 2 layers",
+                "freeze_neck": True,
+                "lr": 0.0005,
+                "description": "Descongelar backbone, mantener neck congelado",
             },
             {
-                "epoch": 40,
-                "unfreeze_layers": ["model.20", "model.19", "model.18"],
-                "description": "Unfreeze middle layers",
-            },
-            {
-                "epoch": 60,
-                "unfreeze_layers": "all",
-                "description": "Unfreeze all layers (full fine-tuning)",
+                "name": "Phase 3: Full Unfreezing",
+                "epochs": total_epochs - 2 * (total_epochs // 3),
+                "freeze_backbone": False,
+                "freeze_neck": False,
+                "lr": 0.0001,
+                "description": "Entrenar todo el modelo con LR bajo",
             },
         ]
 
-        print("\nProgressive Unfreezing Schedule:")
-        print("=" * 60)
-        for schedule in self.progressive_unfreeze_schedule:
-            print(f"Epoch {schedule['epoch']:2d}: {schedule['description']}")
-        print("=" * 60)
-
-    def _apply_progressive_unfreeze(self, current_epoch):
-        """Apply progressive unfreezing based on current epoch"""
-        if not hasattr(self.model, "model") or self.model.model is None:
-            return
-
-        # First, ensure all parameters require gradients
-        for param in self.model.model.parameters():
-            param.requires_grad = True
-
-        for schedule in reversed(self.progressive_unfreeze_schedule):
-            if current_epoch >= schedule["epoch"]:
-                if "freeze_backbone" in schedule and schedule["freeze_backbone"]:
-                    # Freeze backbone layers, keep classifier head unfrozen
-                    for name, param in self.model.model.named_parameters():
-                        if not name.startswith("model.22"):  # Freeze everything except classifier
-                            param.requires_grad = False
-                    print(f"Epoch {current_epoch}: Backbone frozen, training head only")
-                    break
-
-                elif "unfreeze_layers" in schedule:
-                    layers_to_unfreeze = schedule["unfreeze_layers"]
-
-                    if layers_to_unfreeze == "all":
-                        # Unfreeze all layers
-                        for param in self.model.model.parameters():
-                            param.requires_grad = True
-                        print(f"Epoch {current_epoch}: All layers unfrozen")
-                        break
-                    else:
-                        # Unfreeze specific layers, freeze others
-                        for name, param in self.model.model.named_parameters():
-                            # Check if this parameter is in the layers to unfreeze
-                            should_unfreeze = any(layer in name for layer in layers_to_unfreeze)
-                            param.requires_grad = should_unfreeze
-                        print(f"Epoch {current_epoch}: Unfrozen layers: {layers_to_unfreeze}")
-                        break
-
-    def train_model(self, dataset_path, epochs=100):
-        """Train pure YOLOv12 classification model with progressive unfreezing"""
         print(f"\n{'='*60}")
-        print("STARTING PURE YOLOv12 CLASSIFICATION TRAINING")
-        print(f"{'='*60}")
-        print(f"Model: YOLOv12{self.model_size}")
-        print(f"Epochs: {epochs}")
-        print(f"Batch size: {self.batch_size}")
-        print(f"Image size: {self.img_size}")
-        print(f"Number of classes: {len(self.class_names)}")
-        print(f"Dataset path: {dataset_path}")
+        print("PROGRESSIVE UNFREEZING TRAINING PLAN:")
+        for i, phase in enumerate(phases):
+            print(f"{phase['name']}: {phase['epochs']} epochs, LR: {phase['lr']}")
+            print(f"  - {phase['description']}")
+        print(f"{'='*60}\n")
 
-        if self.class_weights:
-            print("Class weights will be applied during training")
-
-        print(f"{'='*60}")
-
-        # Create YOLO config with explicit class count
-        config_path = self.create_yolo_classification_config(dataset_path)
-
-        # Apply initial freezing (start with backbone frozen)
-        self._apply_progressive_unfreeze(0)
-
-        # Train the model with reduced batch size to avoid memory issues
         try:
-            results = self.model.train(
-                data=config_path,
-                epochs=epochs,
-                imgsz=self.img_size,
-                batch=max(1, self.batch_size // 2),  # Reduce batch size to prevent memory issues
-                device="cpu",
-                workers=4,  # Reduce workers
-                patience=20,
-                save=True,
-                save_period=10,
-                val=True,
-                project=self.save_dir,
-                name="training",
-                exist_ok=True,
-                pretrained=True,
-                optimizer="RMSProp",
-                lr0=5e-4,
-                lrf=0.01,
-                momentum=0.937,
-                weight_decay=0.0005,
-                warmup_epochs=3,
-                warmup_momentum=0.8,
-                warmup_bias_lr=0.1,
-                cos_lr=True,
-                cls=1.0,  # Classification loss weight
-                dfl=1.5,  # Distribution focal loss weight
-                verbose=True,
-            )
+            current_epoch = 0
+
+            for phase_idx, phase in enumerate(phases):
+                print(f"\n🚀 Starting {phase['name']}")
+                print(f"Epochs: {phase['epochs']}, Learning Rate: {phase['lr']}")
+                print("-" * 50)
+
+                # Configurar el congelamiento para esta fase
+                if phase_idx == 0:
+                    # Fase 1: Congelar backbone
+                    self.freeze_layers(self.model, freeze_backbone=True, freeze_neck=False)
+                elif phase_idx == 1:
+                    # Fase 2: Descongelar backbone, congelar neck
+                    self.unfreeze_layers(self.model, unfreeze_from_layer=0)
+                    self.freeze_layers(self.model, freeze_backbone=False, freeze_neck=True)
+                else:
+                    # Fase 3: Descongelar todo
+                    self.unfreeze_layers(self.model, unfreeze_from_layer=0)
+
+                # Parámetros de entrenamiento para esta fase
+                phase_results = self.model.train(
+                    data=config_path,
+                    epochs=phase["epochs"],
+                    imgsz=self.img_size,
+                    batch=self.batch_size,
+                    device="cpu",  # Change to "0" if you have GPU
+                    workers=2,
+                    patience=max(10, phase["epochs"] // 3),
+                    save=True,
+                    save_period=max(5, phase["epochs"] // 4),
+                    val=True,
+                    project=self.save_dir,
+                    name=f"phase_{phase_idx + 1}_training",
+                    exist_ok=True,
+                    pretrained=True,
+                    resume=phase_idx > 0,  # Reanudar desde la fase anterior
+                    # Parámetros optimizados por fase
+                    optimizer="AdamW",
+                    lr0=phase["lr"],
+                    lrf=0.1,
+                    momentum=0.9,
+                    weight_decay=0.001,
+                    warmup_epochs=min(3, phase["epochs"] // 5),
+                    warmup_momentum=0.8,
+                    warmup_bias_lr=phase["lr"] * 0.1,
+                    # Data augmentation adaptativa por fase
+                    hsv_h=0.01 if phase_idx == 0 else 0.02,
+                    hsv_s=0.5 if phase_idx == 0 else 0.7,
+                    hsv_v=0.3 if phase_idx == 0 else 0.4,
+                    degrees=5 if phase_idx == 0 else 10,
+                    translate=0.1 if phase_idx == 0 else 0.2,
+                    scale=0.3 if phase_idx == 0 else 0.5,
+                    shear=0.0,
+                    perspective=0.0,
+                    flipud=0.3 if phase_idx == 0 else 0.5,
+                    fliplr=0.5,
+                    mosaic=0.0,
+                    mixup=0.0,
+                    # Loss weights
+                    cls=1.0,
+                    box=0.0,
+                    dfl=0.0,
+                    verbose=True,
+                    plots=True,
+                )
+
+                current_epoch += phase["epochs"]
+                print(f"Completed {phase['name']}")
+                print(f"Total epochs completed: {current_epoch}/{total_epochs}")
+
+                # Evaluar al final de cada fase
+                print(f"\nEvaluating {phase['name']}...")
+                try:
+                    val_results = self.model.val()
+                    print(f"Phase {phase_idx + 1} validation completed")
+                except Exception as e:
+                    print(f"Phase {phase_idx + 1} validation error: {e}")
+
+            print(f"\n🎉 Progressive unfreezing training completed!")
+            return phase_results
+
         except Exception as e:
-            print(f"Training error: {e}")
-            print("Trying with even smaller batch size...")
+            print(f"Progressive training failed: {e}")
+            print("Trying fallback standard training...")
+
+            # Fallback a entrenamiento estándar
+            return self.train_with_improved_params(config_path, total_epochs)
+
+    def train_with_improved_params(self, config_path, epochs=80):
+        """Train with optimized parameters for better accuracy (fallback method)"""
+        print(f"Starting fallback training with improved parameters...")
+
+        try:
+            # Enhanced training parameters
             results = self.model.train(
                 data=config_path,
                 epochs=epochs,
                 imgsz=self.img_size,
-                batch=1,  # Minimal batch size
+                batch=self.batch_size,
                 device="cpu",
-                workers=1,  # Single worker
-                patience=20,
+                workers=2,
+                patience=15,
                 save=True,
                 save_period=10,
                 val=True,
                 project=self.save_dir,
-                name="training",
+                name="training_fallback",
                 exist_ok=True,
                 pretrained=True,
-                optimizer="RMSProp",
-                lr0=1e-4,  # Lower learning rate
-                lrf=0.01,
-                momentum=0.937,
-                weight_decay=0.0005,
-                warmup_epochs=3,
+                optimizer="AdamW",
+                lr0=0.001,
+                lrf=0.1,
+                momentum=0.9,
+                weight_decay=0.001,
+                warmup_epochs=5,
                 warmup_momentum=0.8,
-                warmup_bias_lr=0.1,
-                cos_lr=True,
+                warmup_bias_lr=0.01,
+                hsv_h=0.02,
+                hsv_s=0.7,
+                hsv_v=0.4,
+                degrees=10,
+                translate=0.2,
+                scale=0.5,
+                shear=0.0,
+                perspective=0.0,
+                flipud=0.5,
+                fliplr=0.5,
+                mosaic=0.0,
+                mixup=0.0,
                 cls=1.0,
-                dfl=1.5,
+                box=0.0,
+                dfl=0.0,
                 verbose=True,
+                plots=True,
             )
 
-        print("Training completed!")
-        return results
+            print("Fallback training completed successfully!")
+            return results
 
-    # [Rest of the methods remain the same - validate_model, create_confusion_matrix, etc.]
-    def validate_model(self, dataset_path):
-        """Validate the trained model with extended metrics"""
-        print("Validating model...")
+        except Exception as e:
+            print(f"Fallback training also failed: {e}")
+            return None
 
-        # Use the best trained weights
-        best_model_path = os.path.join(self.save_dir, "training", "weights", "best.pt")
-        if os.path.exists(best_model_path):
+    def evaluate_model(self, classification_dir):
+        """Comprehensive evaluation"""
+        print("Evaluating trained model...")
+
+        # Load best model from the final phase
+        possible_paths = [
+            os.path.join(self.save_dir, "phase_3_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "phase_2_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "phase_1_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "training_fallback", "weights", "best.pt"),
+        ]
+
+        best_model_path = None
+        for path in possible_paths:
+            if os.path.exists(path):
+                best_model_path = path
+                break
+
+        if best_model_path:
             self.model = YOLO(best_model_path)
             print(f"Loaded best model from: {best_model_path}")
 
         # Standard validation
         results = self.model.val()
 
-        # Calculate Top-K accuracies
-        top_k_metrics = self.calculate_top_k_accuracy(dataset_path, k_values=[1, 3])
-
-        # Combine results
-        validation_results = {"standard_metrics": results, "top_k_metrics": top_k_metrics}
-
-        print("Validation completed!")
-
-        # Safely print Top-K accuracies
-        top1_acc = top_k_metrics.get("top_1_accuracy")
-        top3_acc = top_k_metrics.get("top_3_accuracy")
-
-        if top1_acc is not None:
-            print(f"Top-1 Accuracy: {top1_acc:.4f}")
-        else:
-            print("Top-1 Accuracy: N/A")
-
-        if top3_acc is not None:
-            print(f"Top-3 Accuracy: {top3_acc:.4f}")
-        else:
-            print("Top-3 Accuracy: N/A")
-
-        return validation_results
-
-    def calculate_top_k_accuracy(self, dataset_path, k_values=[1, 3]):
-        """Calculate Top-K accuracy metrics"""
-        print(f"Calculating Top-K accuracy for k={k_values}...")
-
-        val_path = os.path.join(dataset_path, "valid")
-        y_true = []
-        y_pred_probs = []
-
-        # Get predictions for all validation images
-        for class_idx, class_name in enumerate(self.class_names):
-            class_path = os.path.join(val_path, class_name)
-            if os.path.exists(class_path):
-                for img_file in os.listdir(class_path):
-                    if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                        img_path = os.path.join(class_path, img_file)
-
-                        # Predict
-                        results = self.model.predict(img_path, verbose=False)
-
-                        if results and len(results) > 0:
-                            probs = results[0].probs
-                            if probs is not None and hasattr(probs, "data"):
-                                # Get all class probabilities
-                                prob_scores = probs.data.cpu().numpy()
-                                y_true.append(class_idx)
-                                y_pred_probs.append(prob_scores)
-
-        if len(y_true) == 0:
-            print("No predictions found for accuracy calculation")
-            return {}
-
-        # Convert to numpy arrays
-        y_true = np.array(y_true)
-        y_pred_probs = np.array(y_pred_probs)
-
-        # Calculate Top-K accuracies
-        top_k_accuracies = {}
-        for k in k_values:
-            if k <= len(self.class_names):
-                try:
-                    acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
-                    top_k_accuracies[f"top_{k}_accuracy"] = acc
-                    print(f"Top-{k} Accuracy: {acc:.4f}")
-                except Exception as e:
-                    print(f"Error calculating Top-{k} accuracy: {e}")
-                    top_k_accuracies[f"top_{k}_accuracy"] = 0.0
-
-        return top_k_accuracies
-
-    def create_confusion_matrix(self, dataset_path):
-        """Create confusion matrix from validation results"""
-        print("Creating confusion matrix...")
-
-        val_path = os.path.join(dataset_path, "valid")
+        # Detailed evaluation on validation set
+        val_dir = os.path.join(classification_dir, "val")
         y_true = []
         y_pred = []
         y_pred_probs = []
 
-        # Get predictions for all validation images
         for class_idx, class_name in enumerate(self.class_names):
-            class_path = os.path.join(val_path, class_name)
-            if os.path.exists(class_path):
-                for img_file in os.listdir(class_path):
-                    if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                        img_path = os.path.join(class_path, img_file)
+            class_dir = os.path.join(val_dir, class_name)
+            if not os.path.exists(class_dir):
+                continue
 
+            for img_file in os.listdir(class_dir):
+                if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                    img_path = os.path.join(class_dir, img_file)
+
+                    try:
                         # Predict
-                        results = self.model.predict(img_path, verbose=False)
+                        pred_results = self.model.predict(img_path, verbose=False)
 
-                        if results and len(results) > 0:
-                            # Get predicted class
-                            probs = results[0].probs
-                            if probs is not None:
-                                predicted_class = probs.top1
+                        if pred_results and len(pred_results) > 0:
+                            result = pred_results[0]
+
+                            if hasattr(result, "probs") and result.probs is not None:
+                                # Classification result
+                                predicted_class = result.probs.top1
+                                confidence = result.probs.top1conf
+
                                 y_true.append(class_idx)
                                 y_pred.append(predicted_class)
 
-                                # Store probabilities for Top-K calculation
-                                if hasattr(probs, "data"):
-                                    prob_scores = probs.data.cpu().numpy()
-                                    y_pred_probs.append(prob_scores)
+                                # Get all probabilities for top-k calculation
+                                if hasattr(result.probs, "data"):
+                                    probs = result.probs.data.cpu().numpy()
+                                    # Ensure we have the right number of classes
+                                    if len(probs) == len(self.class_names):
+                                        y_pred_probs.append(probs)
+                                    else:
+                                        # Pad or truncate to match class count
+                                        padded_probs = np.zeros(len(self.class_names))
+                                        min_len = min(len(probs), len(self.class_names))
+                                        padded_probs[:min_len] = probs[:min_len]
+                                        y_pred_probs.append(padded_probs)
+
+                    except Exception as e:
+                        print(f"Error predicting {img_path}: {e}")
+                        continue
 
         if len(y_true) == 0:
-            print("No predictions found for confusion matrix")
-            return
+            print("No predictions available for evaluation")
+            return None
 
-        # Calculate Top-K accuracies
-        top_k_metrics = {}
-        if y_pred_probs and len(y_pred_probs) > 0:
+        # Calculate metrics
+        accuracy = np.mean(np.array(y_true) == np.array(y_pred))
+        print(f"Overall Accuracy: {accuracy:.4f}")
+
+        # Top-K accuracies
+        if y_pred_probs:
             y_pred_probs = np.array(y_pred_probs)
-            for k in [1, 3]:
-                if k <= len(self.class_names):
-                    try:
-                        acc = top_k_accuracy_score(y_true, y_pred_probs, k=k)
-                        top_k_metrics[f"top_{k}_accuracy"] = acc
-                    except Exception as e:
-                        print(f"Error calculating Top-{k} accuracy: {e}")
-                        top_k_metrics[f"top_{k}_accuracy"] = 0.0
+
+            try:
+                top1_acc = top_k_accuracy_score(y_true, y_pred_probs, k=1)
+                print(f"Top-1 Accuracy: {top1_acc:.4f}")
+            except:
+                print("Could not calculate Top-1 accuracy")
+
+            if len(self.class_names) >= 3:
+                try:
+                    top3_acc = top_k_accuracy_score(y_true, y_pred_probs, k=3)
+                    print(f"Top-3 Accuracy: {top3_acc:.4f}")
+                except:
+                    print("Could not calculate Top-3 accuracy")
 
         # Create confusion matrix
+        self.create_confusion_matrix(y_true, y_pred)
+
+        return accuracy
+
+    def create_confusion_matrix(self, y_true, y_pred):
+        """Create detailed confusion matrix"""
         cm = confusion_matrix(y_true, y_pred)
 
         # Calculate per-class metrics
-        class_accuracies = cm.diagonal() / cm.sum(axis=1)
-        class_support = cm.sum(axis=1)
+        per_class_accuracy = cm.diagonal() / cm.sum(axis=1)
 
-        # Plot
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8))
+        # Create visualization
+        plt.figure(figsize=(12, 10))
 
-        # Confusion matrix
+        # Normalize confusion matrix for better visualization
+        cm_normalized = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
+
         sns.heatmap(
-            cm,
-            annot=True,
+            cm_normalized,
+            annot=cm,  # Show actual counts
             fmt="d",
             cmap="Blues",
             xticklabels=self.class_names,
             yticklabels=self.class_names,
-            ax=ax1,
+            cbar_kws={"label": "Normalized Frequency"},
         )
-        ax1.set_title("Confusion Matrix - Pure YOLOv12 Classifier")
-        ax1.set_xlabel("Predicted Labels")
-        ax1.set_ylabel("True Labels")
-        ax1.tick_params(axis="x", rotation=45)
 
-        # Per-class accuracy
-        class_names_short = [
-            name[:15] + "..." if len(name) > 15 else name for name in self.class_names
-        ]
-        bars = ax2.bar(
-            range(len(self.class_names)),
-            class_accuracies,
-            color=[
-                "red" if acc < 0.5 else "orange" if acc < 0.7 else "green"
-                for acc in class_accuracies
-            ],
-        )
-        ax2.set_title("Per-Class Accuracy")
-        ax2.set_xlabel("Classes")
-        ax2.set_ylabel("Accuracy")
-        ax2.set_xticks(range(len(self.class_names)))
-        ax2.set_xticklabels(class_names_short, rotation=45, ha="right")
-        ax2.set_ylim(0, 1)
+        plt.title("Progressive Unfreezing YOLOv12 Classifier - Confusion Matrix")
+        plt.xlabel("Predicted Labels")
+        plt.ylabel("True Labels")
+        plt.xticks(rotation=45, ha="right")
+        plt.yticks(rotation=0)
 
-        # Add values on bars
-        for i, (bar, acc, support) in enumerate(zip(bars, class_accuracies, class_support)):
-            ax2.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.01,
-                f"{acc:.2f}\n({support})",
+        # Add accuracy text
+        for i in range(len(self.class_names)):
+            plt.text(
+                len(self.class_names) + 0.5,
+                i + 0.5,
+                f"Acc: {per_class_accuracy[i]:.3f}",
                 ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-        # Add Top-K accuracy information
-        if top_k_metrics:
-            info_text = "Top-K Accuracies:\n"
-            for k, acc in top_k_metrics.items():
-                info_text += f"{k.replace('_', '-').title()}: {acc:.4f}\n"
-            ax2.text(
-                0.02,
-                0.98,
-                info_text,
-                transform=ax2.transAxes,
-                verticalalignment="top",
-                bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.8),
+                va="center",
             )
 
         plt.tight_layout()
-        save_path = os.path.join(self.save_dir, "confusion_matrix_yolov12.png")
+
+        save_path = os.path.join(self.save_dir, "progressive_unfreezing_confusion_matrix.png")
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
         plt.close()
 
-        # Classification report with Top-K metrics
+        print(f"Confusion matrix saved: {save_path}")
+
+        # Save detailed report
         report = classification_report(
             y_true, y_pred, target_names=self.class_names, output_dict=True
         )
-        report["class_weights"] = self.class_weights
-        report["top_k_accuracies"] = top_k_metrics
-        report["progressive_unfreeze_schedule"] = self.progressive_unfreeze_schedule
 
-        report_path = os.path.join(self.save_dir, "classification_report_yolov12.json")
-        with open(report_path, "w") as f:
+        with open(os.path.join(self.save_dir, "progressive_unfreezing_report.json"), "w") as f:
             json.dump(report, f, indent=2)
 
-        print(f"Confusion matrix saved to: {save_path}")
-        print(f"Classification report saved to: {report_path}")
-
-        # Print Top-K accuracies
-        if top_k_metrics:
-            print("\nTop-K Accuracies:")
-            for k, acc in top_k_metrics.items():
-                print(f"  {k.replace('_', '-').title()}: {acc:.4f}")
-
-    def predict_with_confidence(self, image_path, threshold=0.7):
-        """Make predictions with confidence analysis"""
-        if self.model is None:
-            print("Model not initialized")
-            return None
-
-        results = self.model.predict(image_path, verbose=False)
-
-        if not results or len(results) == 0:
-            return None
-
-        result = results[0]
-        if result.probs is None:
-            return None
-
-        probs = result.probs
-        predicted_class = probs.top1
-        confidence = float(probs.top1conf)
-
-        # Get top 5 predictions
-        top5_indices = probs.top5
-        top5_confidences = probs.top5conf
-
-        prediction_result = {
-            "predicted_class": self.class_names[predicted_class],
-            "confidence": confidence,
-            "class_id": int(predicted_class),
-            "is_confident": confidence > threshold,
-            "top_5_predictions": [
-                {
-                    "class": self.class_names[idx],
-                    "confidence": float(conf),
-                    "class_id": int(idx),
-                }
-                for idx, conf in zip(top5_indices, top5_confidences)
-            ],
-            "model_type": f"Pure YOLOv12{self.model_size} Classifier with Progressive Unfreezing",
-        }
-
-        return prediction_result
-
-    def save_model_info(self):
-        """Save model information and metadata"""
-        metadata = {
-            "model_type": f"Pure YOLOv12{self.model_size} Classifier",
-            "class_names": self.class_names,
-            "img_size": self.img_size,
-            "batch_size": self.batch_size,
-            "num_classes": len(self.class_names),
-            "class_weights": self.class_weights,
-            "progressive_unfreeze_schedule": self.progressive_unfreeze_schedule,
-            "training_timestamp": datetime.datetime.now().isoformat(),
-            "save_directory": self.save_dir,
-            "model_path": os.path.join(self.save_dir, "training", "weights", "best.pt"),
-            "features": [
-                "Progressive unfreezing",
-                "Top-1 and Top-3 accuracy metrics",
-                "Class balancing with weights",
-                "No image cropping (direct classification format)",
-                "Improved segmentation to detection conversion",
-                "Proper dataset format validation",
-                "Class ID validation and fixing",
-            ],
-        }
-
-        metadata_path = os.path.join(self.save_dir, "model_metadata.json")
-        with open(metadata_path, "w") as f:
-            json.dump(metadata, f, indent=2)
-
-        print(f"Model metadata saved to: {metadata_path}")
-
-    def load_model(self, model_path):
-        """Load a trained YOLOv12 model"""
-        try:
-            self.model = YOLO(model_path)
-            print(f"Model loaded from: {model_path}")
-
-            # Try to load metadata
-            metadata_path = os.path.join(os.path.dirname(model_path), "model_metadata.json")
-            if os.path.exists(metadata_path):
-                with open(metadata_path, "r") as f:
-                    metadata = json.load(f)
-                    self.class_names = metadata.get("class_names", [])
-                    self.img_size = metadata.get("img_size", 640)
-                    self.class_weights = metadata.get("class_weights", None)
-                    self.progressive_unfreeze_schedule = metadata.get(
-                        "progressive_unfreeze_schedule", []
-                    )
-                print("Metadata loaded successfully")
-            else:
-                print("Metadata file not found")
-
-            return True
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            return False
-
-    def verify_dataset_format(self, dataset_path):
-        """Verify that dataset is in proper detection format"""
-        print("Verifying dataset format...")
-
-        issues_found = []
-        total_annotations = 0
-        valid_annotations = 0
-        class_id_issues = []
-
-        for split in ["train", "val", "valid"]:
-            labels_dir = os.path.join(dataset_path, split, "labels")
-            if not os.path.exists(labels_dir):
-                continue
-
-            print(f"Checking {split} labels...")
-
-            for label_file in os.listdir(labels_dir):
-                if label_file.endswith(".txt"):
-                    file_path = os.path.join(labels_dir, label_file)
-
-                    try:
-                        with open(file_path, "r") as f:
-                            lines = f.readlines()
-
-                        for line_num, line in enumerate(lines):
-                            line = line.strip()
-                            if line:
-                                total_annotations += 1
-                                parts = line.split()
-
-                                if len(parts) == 5:
-                                    # Check if all values are valid
-                                    try:
-                                        class_id = int(parts[0])
-                                        coords = [float(x) for x in parts[1:]]
-
-                                        # Check class_id range
-                                        if len(self.class_names) > 0 and class_id >= len(
-                                            self.class_names
-                                        ):
-                                            class_id_issues.append(
-                                                f"{label_file}:{line_num+1} - Class ID {class_id} >= {len(self.class_names)}"
-                                            )
-                                        elif class_id < 0:
-                                            class_id_issues.append(
-                                                f"{label_file}:{line_num+1} - Negative class ID {class_id}"
-                                            )
-
-                                        # Check coordinate ranges
-                                        if all(0.0 <= coord <= 1.0 for coord in coords):
-                                            valid_annotations += 1
-                                        else:
-                                            issues_found.append(
-                                                f"{label_file}:{line_num+1} - Coordinates out of range"
-                                            )
-
-                                    except ValueError:
-                                        issues_found.append(
-                                            f"{label_file}:{line_num+1} - Invalid numeric values"
-                                        )
-
-                                elif len(parts) > 5:
-                                    issues_found.append(
-                                        f"{label_file}:{line_num+1} - Still in segmentation format"
-                                    )
-
-                                else:
-                                    issues_found.append(
-                                        f"{label_file}:{line_num+1} - Invalid format"
-                                    )
-
-                    except Exception as e:
-                        issues_found.append(f"{label_file} - Error reading file: {e}")
-
-        print(f"Dataset Format Verification Results:")
-        print(f"Total annotations: {total_annotations}")
-        print(f"Valid annotations: {valid_annotations}")
-        print(f"Format issues found: {len(issues_found)}")
-        print(f"Class ID issues found: {len(class_id_issues)}")
-
-        if class_id_issues:
-            print(f"Class ID Issues (CRITICAL - causes IndexError):")
-            for issue in class_id_issues[:10]:
-                print(f"  - {issue}")
-            if len(class_id_issues) > 10:
-                print(f"  ... and {len(class_id_issues) - 10} more class ID issues")
-
-        if issues_found:
-            print(f"Format Issues:")
-            for issue in issues_found[:10]:
-                print(f"  - {issue}")
-            if len(issues_found) > 10:
-                print(f"  ... and {len(issues_found) - 10} more format issues")
-
-        if len(class_id_issues) == 0 and len(issues_found) == 0:
-            print("All annotations are in proper detection format with valid class IDs!")
-
-        return len(issues_found) == 0 and len(class_id_issues) == 0
+        # Print per-class performance
+        print("\nPer-class Performance:")
+        for i, class_name in enumerate(self.class_names):
+            if i < len(per_class_accuracy):
+                support = cm.sum(axis=1)[i]
+                print(f"  {class_name}: {per_class_accuracy[i]:.3f} accuracy ({support} samples)")
 
 
 def main():
-    """Main training pipeline for pure YOLOv12 classification with error handling"""
+    """Improved training pipeline with progressive unfreezing"""
+    print("Starting YOLOv12 Classification Training with Progressive Unfreezing")
+    print("=" * 70)
+
     # Initialize classifier
-    classifier = PureYOLOv12FurnitureClassifier(
-        model_size="n", img_size=640, batch_size=8
-    )  # Reduced batch size
+    classifier = ImprovedYOLOv12Classifier(model_size="n", img_size=640, batch_size=8)
 
     try:
-        # Download and prepare dataset
+        # Download dataset (you need to implement this method)
         print("Step 1: Downloading dataset...")
         gdrive_file_id = "1LVZdiClbXwOzfKug2PZKxTdAEIvYYhWo"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
-        # Prepare classification dataset (no cropping needed)
-        print("\nStep 2: Preparing classification dataset with class validation...")
-        (train_images, train_labels), (val_images, val_labels) = (
-            classifier.prepare_classification_dataset(dataset_path, train_split=0.8)
+        # Extract and clean objects
+        print("\nStep 2: Extracting objects and removing background...")
+        classification_dir = classifier.clean_and_extract_objects(
+            dataset_path, min_area=0.005, max_samples_per_class=3000
         )
 
-        # Verify dataset format after conversion
-        print("\nStep 2.1: Verifying dataset format and class IDs...")
-        is_format_correct = classifier.verify_dataset_format(dataset_path)
-        if not is_format_correct:
-            print("ERROR: Dataset format issues detected. Please fix these before training.")
-            print("The IndexError you encountered is likely due to class ID issues.")
-            return
-        else:
-            print("Dataset format verification passed!")
+        # Create YOLO config
+        print("\nStep 3: Creating YOLO classification config...")
+        config_path = classifier.create_yolo_classification_config(classification_dir)
 
         # Initialize model
-        print("\nStep 3: Initializing YOLOv12 model...")
-        if not classifier.initialize_yolov12_classifier():
+        print("\nStep 4: Initializing YOLOv12 model...")
+        if not classifier.initialize_model():
             print("Failed to initialize model")
             return
 
-        # Train model with progressive unfreezing and error handling
-        print("\nStep 4: Training model with progressive unfreezing...")
-        training_results = classifier.train_model(dataset_path, epochs=100)
-        print(training_results)
+        # Train with progressive unfreezing
+        print("\nStep 5: Training with progressive unfreezing...")
+        results = classifier.train_with_progressive_unfreezing(config_path, total_epochs=80)
 
-        # Validate model with Top-K metrics
-        print("\nStep 5: Validating model with Top-K accuracy...")
-        validation_results = classifier.validate_model(dataset_path)
-        print(validation_results)
+        # Evaluate
+        print("\nStep 6: Comprehensive evaluation...")
+        final_accuracy = classifier.evaluate_model(classification_dir)
 
-        # Create confusion matrix with Top-K metrics
-        print("\nStep 6: Creating confusion matrix with Top-K metrics...")
-        classifier.create_confusion_matrix(dataset_path)
-
-        # Save model info
-        print("\nStep 7: Saving model information...")
-        classifier.save_model_info()
-
-        print(f"\n{'='*60}")
-        print("PURE YOLOV12 TRAINING COMPLETED SUCCESSFULLY!")
-        print(f"{'='*60}")
-        print(f"Model saved in: {classifier.save_dir}")
-        print("Features implemented:")
-        print("✓ Progressive unfreezing of layers")
-        print("✓ Top-1 and Top-3 accuracy metrics")
-        print("✓ No image cropping (direct classification)")
-        print("✓ Class balancing with weights")
-        print("✓ Improved segmentation to detection conversion")
-        print("✓ Dataset format validation")
-        print("✓ Class ID validation and fixing")
-        print("✓ Better error handling and logging")
-        print("✓ IndexError prevention")
+        print(f"\n{'='*70}")
+        print("PROGRESSIVE UNFREEZING TRAINING COMPLETED!")
+        print(f"{'='*70}")
+        print(f"Final accuracy: {final_accuracy:.4f}")
+        print(f"Results saved in: {classifier.save_dir}")
+        print("\nProgressive Unfreezing Applied:")
+        print("✓ Phase 1: Frozen backbone (first 1/3 epochs)")
+        print("✓ Phase 2: Unfrozen backbone + frozen neck (second 1/3 epochs)")
+        print("✓ Phase 3: Fully unfrozen with low LR (final 1/3 epochs)")
+        print("✓ Adaptive learning rates per phase")
+        print("✓ Progressive data augmentation intensity")
 
     except Exception as e:
-        print(f"\nERROR: Training failed with: {e}")
-        print("This is likely due to the class ID mismatch issue.")
-        print("Check the dataset format verification output above.")
+        print(f"Training failed: {e}")
+        import traceback
 
-    finally:
-        # Cleanup temporary files
-        if os.path.exists("dataset/") and "dataset_path" in locals() and dataset_path != "dataset/":
-            try:
-                shutil.rmtree("dataset/")
-            except:
-                pass
-
-    print(f"{'='*60}")
+        traceback.print_exc()
 
 
 if __name__ == "__main__":
