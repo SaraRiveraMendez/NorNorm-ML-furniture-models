@@ -629,7 +629,7 @@ def main():
     try:
         # Download dataset (you need to implement this method)
         print("Step 1: Downloading dataset...")
-        gdrive_file_id = "1LVZdiClbXwOzfKug2PZKxTdAEIvYYhWo"
+        gdrive_file_id = "1M0e7oXsqs9BQRKxzBzMXKSUSg9JmHfzn"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
         # Extract and clean objects
