@@ -38,6 +38,48 @@ class ImprovedYOLOv12Classifier:
         os.makedirs(self.save_dir, exist_ok=True)
         print(f"Save directory created: {self.save_dir}")
 
+    def download_and_extract_dataset(self, gdrive_file_id):
+        """Download and extract dataset from Google Drive"""
+        print("Downloading dataset from Google Drive...")
+
+        # Create download directory
+        download_dir = os.path.join(self.save_dir, "downloads")
+        os.makedirs(download_dir, exist_ok=True)
+
+        # Download file
+        zip_path = os.path.join(download_dir, "dataset.zip")
+        url = f"https://drive.google.com/uc?id={gdrive_file_id}"
+
+        try:
+            gdown.download(url, zip_path, quiet=False)
+            print(f"Dataset downloaded: {zip_path}")
+        except Exception as e:
+            print(f"Download failed: {e}")
+            print("Please manually download the dataset and place it in the downloads folder")
+            return None
+
+        # Extract dataset
+        extract_path = os.path.join(download_dir, "extracted")
+        os.makedirs(extract_path, exist_ok=True)
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(extract_path)
+            print(f"Dataset extracted to: {extract_path}")
+
+            # Find the actual dataset folder (sometimes it's nested)
+            for root, dirs, files in os.walk(extract_path):
+                if "data.yaml" in files or any(d in ["train", "val", "valid"] for d in dirs):
+                    print(f"Found dataset at: {root}")
+                    return root
+
+            # If no specific structure found, return the extract path
+            return extract_path
+
+        except Exception as e:
+            print(f"Extraction failed: {e}")
+            return None
+
     def clean_and_extract_objects(self, dataset_path, min_area=0.005, max_samples_per_class=5000):
         """Extract objects from detection data and create proper classification structure"""
         print("Extracting and cleaning objects from detection annotations...")
@@ -380,7 +422,6 @@ class ImprovedYOLOv12Classifier:
                 print(f"Completed {phase['name']}")
                 print(f"Total epochs completed: {current_epoch}/{total_epochs}")
 
-                # Evaluar al final de cada fase
                 print(f"\nEvaluating {phase['name']}...")
                 try:
                     val_results = self.model.val()
