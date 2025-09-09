@@ -135,19 +135,16 @@ class ImprovedYOLOv12Classifier:
             if n in self.class_names
         }
 
-        # Prepare cleaned dataset dir
+        # Prepare cleaned dataset dir - LIMPIAR PRIMERO
         classification_dir = os.path.join(self.save_dir, "cleaned_dataset")
+
+        # Eliminar directorio existente si está corrupto
+        if os.path.exists(classification_dir):
+            shutil.rmtree(classification_dir)
+
         os.makedirs(classification_dir, exist_ok=True)
 
-        # Save new yaml
-        new_yaml = {
-            "train": os.path.join(classification_dir, "train"),
-            "val": os.path.join(classification_dir, "val"),
-            "nc": len(self.class_names),
-            "names": self.class_names,
-        }
-        with open(os.path.join(classification_dir, "data.yaml"), "w") as f:
-            yaml.safe_dump(new_yaml, f)
+        # NO crear data.yaml aquí - se hará en create_yolo_classification_config
 
         # Track counts
         class_counts = {name: 0 for name in self.class_names}
@@ -224,7 +221,7 @@ class ImprovedYOLOv12Classifier:
         for cls, count in class_counts.items():
             print(f"  {cls}: {count} objects")
 
-        return os.path.join(classification_dir, "data.yaml")
+        return classification_dir  # Retornar solo el directorio, no el archivo yaml
 
     def create_yolo_classification_config(self, classification_dir):
         """Create YOLO classification configuration"""
@@ -237,6 +234,15 @@ class ImprovedYOLOv12Classifier:
         }
 
         config_path = os.path.join(classification_dir, "data.yaml")
+
+        # Verificar que el directorio existe y no hay conflictos
+        if os.path.exists(config_path) and not os.path.isfile(config_path):
+            print(f"Advertencia: {config_path} existe pero no es un archivo. Eliminando...")
+            if os.path.isdir(config_path):
+                shutil.rmtree(config_path)
+            else:
+                os.remove(config_path)
+
         with open(config_path, "w") as f:
             yaml.safe_dump(config, f)
 
