@@ -452,16 +452,6 @@ class ImprovedYOLOv12Classifier:
                     "warmup_epochs": min(3, phase["epochs"] // 5),
                     "warmup_momentum": 0.8,
                     "warmup_bias_lr": phase["lr"] * 0.1,
-                    "hsv_h": 0.01 if phase_idx == 0 else 0.02,
-                    "hsv_s": 0.5 if phase_idx == 0 else 0.7,
-                    "hsv_v": 0.3 if phase_idx == 0 else 0.4,
-                    "degrees": 5 if phase_idx == 0 else 10,
-                    "translate": 0.1 if phase_idx == 0 else 0.2,
-                    "scale": 0.3 if phase_idx == 0 else 0.5,
-                    "flipud": 0.3 if phase_idx == 0 else 0.5,
-                    "fliplr": 0.5,
-                    "mosaic": 0.0,
-                    "mixup": 0.0,
                     "cls": 1.0,
                     "box": 0.0,
                     "dfl": 0.0,
@@ -532,16 +522,6 @@ class ImprovedYOLOv12Classifier:
                 warmup_epochs=5,
                 warmup_momentum=0.8,
                 warmup_bias_lr=0.01,
-                hsv_h=0.02,
-                hsv_s=0.7,
-                hsv_v=0.4,
-                degrees=10,
-                translate=0.2,
-                scale=0.5,
-                flipud=0.5,
-                fliplr=0.5,
-                mosaic=0.0,
-                mixup=0.0,
                 cls=1.0,
                 box=0.0,
                 dfl=0.0,
@@ -714,10 +694,10 @@ def main():
     try:
         # Download dataset
         print("Step 1: Downloading dataset...")
-        gdrive_file_id = "1M0e7oXsqs9BQRKxzBzMXKSUSg9JmHfzn"
+        gdrive_file_id = "1nGK6c3TQWzTfI5KpekIm10NP5W2hAswE"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
-        # Extract and clean objects (con split automático)
+        # Extract and clean objects (authomatic split)
         print("\nStep 2: Extracting objects, removing background, and creating train/val split...")
         classification_dir = classifier.clean_and_extract_objects(
             dataset_path, max_samples_per_class=10000, val_split=0.2  # 20% para validación
