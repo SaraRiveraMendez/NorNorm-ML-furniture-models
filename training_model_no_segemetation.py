@@ -709,7 +709,7 @@ def main():
 
     # Download and prepare dataset
     print("Step 1: Downloading dataset...")
-    gdrive_file_id = "1DjNhyBMEcnuF-jpgUdBuJxjRmWHSNIwu"
+    gdrive_file_id = "1nGK6c3TQWzTfI5KpekIm10NP5W2hAswE"
     dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
     # Prepare classification dataset with class weights calculation
