@@ -180,7 +180,7 @@ class ImprovedYOLOv12Classifier:
 
         # Crear split estratificado por clase si es posible
         try:
-            # Intentar hacer un split estratificado
+
             image_classes = []
             valid_images = []
 
@@ -290,11 +290,44 @@ class ImprovedYOLOv12Classifier:
 
         return classification_dir
 
+    def _process_label_file(self, label_path, id_map, min_area):
+        """Helper method to process individual label files"""
+        with open(label_path, "r") as f:
+            lines = f.readlines()
 
-def _process_label_file(self, label_path, id_map, min_area):
-    """Helper method to process individual label files"""
-    with open(label_path, "r") as f:
-        lines = f.readlines()
+        new_lines = []
+        class_counts = {name: 0 for name in self.class_names}
+        total_lines = len(lines)
+        kept_lines = 0
+
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) != 5:
+                continue
+
+            class_id = int(parts[0])
+            if class_id not in id_map:
+                continue
+
+            cx, cy, bw, bh = map(float, parts[1:])
+
+            # Skip invalid
+            if bw <= 0 or bh <= 0 or cx < 0 or cy < 0 or cx > 1 or cy > 1:
+                continue
+            if bw * bh < min_area:
+                continue
+
+            new_id = id_map[class_id]
+            new_lines.append(f"{new_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+            class_counts[self.class_names[new_id]] += 1
+            kept_lines += 1
+
+        return {
+            "lines": new_lines,
+            "total": total_lines,
+            "kept": kept_lines,
+            "class_counts": class_counts,
+        }
 
     def create_yolo_classification_config(self, classification_dir):
         """Create YOLO classification configuration"""
