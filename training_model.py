@@ -69,7 +69,7 @@ class ImprovedYOLOv12Classifier:
 
             # Find the actual dataset folder (sometimes it's nested)
             for root, dirs, files in os.walk(extract_path):
-                if "data.yaml" in files or any(d in ["train", "val", "valid"] for d in dirs):
+                if "data.yaml" in files or any(d in ["train"] for d in dirs):
                     print(f"Found dataset at: {root}")
                     return root
 
@@ -106,39 +106,55 @@ class ImprovedYOLOv12Classifier:
 
         print("Label files created successfully")
 
-    def clean_and_extract_objects(self, dataset_path, max_samples_per_class=10000):
-        """Extract all objects from detection data and create proper classification structure (no skipping)."""
-        print("Extracting and cleaning objects from detection annotations...")
+    def clean_and_extract_objects(self, dataset_path, min_area=0.0001, max_samples_per_class=10000):
+        """Clean YOLO detection dataset (remove background, invalid bboxes) and keep YOLO format."""
+        print("Extracting and cleaning detection annotations...")
 
-        # Load class names and normalize
+        # Load class names
         yaml_path = os.path.join(dataset_path, "data.yaml")
-        if os.path.exists(yaml_path):
-            with open(yaml_path, "r") as f:
-                data_config = yaml.safe_load(f)
-                self.class_names = data_config.get("names", [])
+        if not os.path.exists(yaml_path):
+            raise FileNotFoundError(f"{yaml_path} not found")
 
-        # Normalize everything to lowercase, drop background
-        original_names = [name.strip().lower() for name in self.class_names]
-        self.class_names = [name for name in original_names if name not in ["background", "bg"]]
+        with open(yaml_path, "r") as f:
+            data_config = yaml.safe_load(f)
+            self.class_names = data_config.get("names", [])
+
+        # Normalize & remove background
+        original_names = [n.strip().lower() for n in self.class_names]
+        self.class_names = [n for n in original_names if n not in ["background", "bg"]]
 
         if len(self.class_names) < len(original_names):
-            print(
-                f"Removed background class(es). Classes: {len(original_names)} -> {len(self.class_names)}"
-            )
+            print(f"Removed background class(es). {len(original_names)} → {len(self.class_names)}")
 
         print(f"Target classes: {self.class_names}")
 
-        # Create classification directory structure
-        classification_dir = os.path.join(self.save_dir, "classification_dataset")
-        for split in ["train", "val"]:
-            for class_name in self.class_names:
-                os.makedirs(os.path.join(classification_dir, split, class_name), exist_ok=True)
+        # Map old indices → new indices
+        id_map = {
+            i: self.class_names.index(n)
+            for i, n in enumerate(original_names)
+            if n in self.class_names
+        }
 
-        total_extracted = 0
+        # Prepare cleaned dataset dir
+        classification_dir = os.path.join(self.save_dir, "cleaned_dataset")
+        os.makedirs(classification_dir, exist_ok=True)
+
+        # Save new yaml
+        new_yaml = {
+            "train": os.path.join(classification_dir, "train"),
+            "val": os.path.join(classification_dir, "val"),
+            "nc": len(self.class_names),
+            "names": self.class_names,
+        }
+        with open(os.path.join(classification_dir, "data.yaml"), "w") as f:
+            yaml.safe_dump(new_yaml, f)
+
+        # Track counts
         class_counts = {name: 0 for name in self.class_names}
+        total_labels, kept_labels = 0, 0
 
         # Process splits
-        for split in ["train", "val", "valid"]:  # keep "valid" just in case
+        for split in ["train", "val", "valid"]:
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
@@ -147,105 +163,68 @@ class ImprovedYOLOv12Classifier:
 
             print(f"Processing {split} split...")
 
+            new_images_dir = os.path.join(classification_dir, split, "images")
+            new_labels_dir = os.path.join(classification_dir, split, "labels")
+            os.makedirs(new_images_dir, exist_ok=True)
+            os.makedirs(new_labels_dir, exist_ok=True)
+
             for img_file in os.listdir(images_dir):
                 if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
                     continue
 
                 img_path = os.path.join(images_dir, img_file)
+                new_img_path = os.path.join(new_images_dir, img_file)
+
+                # Copy image
+                shutil.copy2(img_path, new_img_path)
+
+                # Process label
                 label_file = os.path.splitext(img_file)[0] + ".txt"
-                label_path = os.path.join(labels_dir, label_file)
+                old_label_path = os.path.join(labels_dir, label_file)
+                new_label_path = os.path.join(new_labels_dir, label_file)
 
-                if not os.path.exists(label_path):
-                    print(f"No label for {img_file}, skipping...")
+                if not os.path.exists(old_label_path):
                     continue
 
-                image = cv2.imread(img_path)
-                if image is None:
-                    print(f"Could not read {img_file}, skipping...")
-                    continue
-                h, w = image.shape[:2]
+                with open(old_label_path, "r") as f:
+                    lines = f.readlines()
 
-                try:
-                    with open(label_path, "r") as f:
-                        lines = f.readlines()
+                new_lines = []
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) != 5:
+                        continue
 
-                    object_count = 0
-                    for line in lines:
-                        parts = line.strip().split()
-                        if len(parts) != 5:
-                            print(f"Bad line in {label_file}: {line.strip()}")
-                            continue
+                    class_id = int(parts[0])
+                    if class_id not in id_map:
+                        continue
 
-                        class_id = int(parts[0])
-                        if class_id >= len(original_names):
-                            print(f"Invalid class id {class_id} in {label_file}")
-                            continue
+                    cx, cy, bw, bh = map(float, parts[1:])
 
-                        original_class_name = original_names[class_id]
-                        if original_class_name in ["background", "bg"]:
-                            continue
+                    # Skip invalid
+                    if bw <= 0 or bh <= 0 or cx < 0 or cy < 0 or cx > 1 or cy > 1:
+                        continue
+                    if bw * bh < min_area:
+                        continue
 
-                        if original_class_name not in self.class_names:
-                            print(f"Class {original_class_name} not in target list")
-                            continue
+                    new_id = id_map[class_id]
+                    new_lines.append(f"{new_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+                    class_counts[self.class_names[new_id]] += 1
+                    kept_labels += 1
 
-                        # Respect per-class limit if needed
-                        if class_counts[original_class_name] >= max_samples_per_class:
-                            continue
+                total_labels += len(lines)
 
-                        # Parse YOLO bbox
-                        cx, cy, bw, bh = map(float, parts[1:])
+                if new_lines:
+                    with open(new_label_path, "w") as f:
+                        f.writelines(new_lines)
 
-                        # Add padding (still keep object if it goes beyond)
-                        padding = 0.1
-                        bw_padded = min(1.0, bw * (1 + padding))
-                        bh_padded = min(1.0, bh * (1 + padding))
+        print(f"\nObject cleaning summary:")
+        print(f"Original labels: {total_labels}")
+        print(f"Kept labels: {kept_labels}")
+        for cls, count in class_counts.items():
+            print(f"  {cls}: {count} objects")
 
-                        x1 = int(max(0, (cx - bw_padded / 2) * w))
-                        y1 = int(max(0, (cy - bh_padded / 2) * h))
-                        x2 = int(min(w, (cx + bw_padded / 2) * w))
-                        y2 = int(min(h, (cy + bh_padded / 2) * h))
-
-                        if x2 <= x1 or y2 <= y1:
-                            print(f"⚠️ Invalid bbox in {img_file} ({x1},{y1},{x2},{y2})")
-                            continue
-
-                        cropped = image[y1:y2, x1:x2]
-
-                        # Always resize (even if small)
-                        try:
-                            cropped_resized = cv2.resize(cropped, (224, 224))
-                        except Exception as e:
-                            print(f"⚠️ Resize failed for {img_file} obj{object_count}: {e}")
-                            continue
-
-                        # Random train/val split
-                        target_split = "train" if np.random.random() < 0.8 else "val"
-
-                        save_filename = f"{os.path.splitext(img_file)[0]}_obj{object_count}.jpg"
-                        save_path = os.path.join(
-                            classification_dir, target_split, original_class_name, save_filename
-                        )
-
-                        cv2.imwrite(save_path, cropped_resized)
-
-                        class_counts[original_class_name] += 1
-                        total_extracted += 1
-                        object_count += 1
-
-                except Exception as e:
-                    print(f"Error processing {img_path}: {e}")
-                    continue
-
-        print(f"\nObject extraction summary:")
-        print(f"Total objects extracted: {total_extracted}")
-        for class_name, count in class_counts.items():
-            print(f"  {class_name}: {count} objects")
-
-        # Create YOLO-compatible label files
-        self.create_classification_labels(classification_dir)
-
-        return classification_dir
+        return os.path.join(classification_dir, "data.yaml")
 
     def create_yolo_classification_config(self, classification_dir):
         """Create YOLO classification configuration"""
