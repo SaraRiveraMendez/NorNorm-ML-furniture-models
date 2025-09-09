@@ -381,9 +381,22 @@ class WeightedYOLOv12Classifier:
             "verbose": True,
         }
 
-        # Add class weights if available in the training arguments
-        if hasattr(self.model, "args"):
-            self.model.args.cls_pos_weight = self.class_weights_tensor
+        # Add class weights to training arguments
+        if self.class_weights_tensor is not None:
+            # Convert tensor to list for YOLO training arguments
+            class_weights_list = self.class_weights_tensor.tolist()
+            # Add to training args (YOLO may support this in future versions)
+            training_args["class_weights"] = class_weights_list
+
+            # Alternative: Set in model args dictionary if it exists
+            if hasattr(self.model, "args") and isinstance(self.model.args, dict):
+                self.model.args["cls_pos_weight"] = class_weights_list
+            elif hasattr(self.model, "args"):
+                # If args is an object, try to set the attribute
+                try:
+                    self.model.args.cls_pos_weight = self.class_weights_tensor
+                except AttributeError:
+                    print("Warning: Could not set cls_pos_weight in model args")
 
         results = self.model.train(**training_args)
 
@@ -709,7 +722,7 @@ def main():
 
     # Download and prepare dataset
     print("Step 1: Downloading dataset...")
-    gdrive_file_id = "1nGK6c3TQWzTfI5KpekIm10NP5W2hAswE"
+    gdrive_file_id = "1DjNhyBMEcnuF-jpgUdBuJxjRmWHSNIwu"
     dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
     # Prepare classification dataset with class weights calculation
