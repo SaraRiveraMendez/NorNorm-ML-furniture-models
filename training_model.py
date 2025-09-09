@@ -238,7 +238,7 @@ class ImprovedYOLOv12Classifier:
 
         config_path = os.path.join(classification_dir, "data.yaml")
         with open(config_path, "w") as f:
-            yaml.safe_dump(config_path, f)
+            yaml.safe_dump(config, f)
 
         print(f"YOLO classification config saved: {config_path}")
         print(f"Number of classes: {len(self.class_names)}")
