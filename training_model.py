@@ -106,29 +106,27 @@ class ImprovedYOLOv12Classifier:
 
         print("Label files created successfully")
 
-    def clean_and_extract_objects(self, dataset_path, min_area=0.005, max_samples_per_class=5000):
-        """Extract all objects from detection data and create proper classification structure"""
+    def clean_and_extract_objects(self, dataset_path, max_samples_per_class=10000):
+        """Extract all objects from detection data and create proper classification structure (no skipping)."""
         print("Extracting and cleaning objects from detection annotations...")
 
-        # Load class names and remove background if present
+        # Load class names and normalize
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if os.path.exists(yaml_path):
             with open(yaml_path, "r") as f:
                 data_config = yaml.safe_load(f)
                 self.class_names = data_config.get("names", [])
 
-        # Filter out background class - this is critical for your accuracy issue
-        original_names = self.class_names.copy()
-        self.class_names = [
-            name for name in self.class_names if name.lower() not in ["background", "bg"]
-        ]
+        # Normalize everything to lowercase, drop background
+        original_names = [name.strip().lower() for name in self.class_names]
+        self.class_names = [name for name in original_names if name not in ["background", "bg"]]
 
         if len(self.class_names) < len(original_names):
             print(
                 f"Removed background class(es). Classes: {len(original_names)} -> {len(self.class_names)}"
             )
 
-        print(f"Target furniture classes: {self.class_names}")
+        print(f"Target classes: {self.class_names}")
 
         # Create classification directory structure
         classification_dir = os.path.join(self.save_dir, "classification_dataset")
@@ -139,8 +137,8 @@ class ImprovedYOLOv12Classifier:
         total_extracted = 0
         class_counts = {name: 0 for name in self.class_names}
 
-        # Process all splits
-        for split in ["train", "val", "valid"]:
+        # Process splits
+        for split in ["train", "val", "valid"]:  # keep "valid" just in case
             images_dir = os.path.join(dataset_path, split, "images")
             labels_dir = os.path.join(dataset_path, split, "labels")
 
@@ -158,11 +156,12 @@ class ImprovedYOLOv12Classifier:
                 label_path = os.path.join(labels_dir, label_file)
 
                 if not os.path.exists(label_path):
+                    print(f"No label for {img_file}, skipping...")
                     continue
 
-                # Load image
                 image = cv2.imread(img_path)
                 if image is None:
+                    print(f"Could not read {img_file}, skipping...")
                     continue
                 h, w = image.shape[:2]
 
@@ -174,57 +173,55 @@ class ImprovedYOLOv12Classifier:
                     for line in lines:
                         parts = line.strip().split()
                         if len(parts) != 5:
+                            print(f"Bad line in {label_file}: {line.strip()}")
                             continue
 
                         class_id = int(parts[0])
-
-                        # Map to new class indices (without background)
                         if class_id >= len(original_names):
+                            print(f"Invalid class id {class_id} in {label_file}")
                             continue
 
                         original_class_name = original_names[class_id]
-                        if original_class_name.lower() in ["background", "bg"]:
-                            continue  # Skip background
-
-                        if original_class_name not in self.class_names:
+                        if original_class_name in ["background", "bg"]:
                             continue
 
-                        # Check if we have enough samples for this class
+                        if original_class_name not in self.class_names:
+                            print(f"Class {original_class_name} not in target list")
+                            continue
+
+                        # Respect per-class limit if needed
                         if class_counts[original_class_name] >= max_samples_per_class:
                             continue
 
-                        # Parse bounding box
+                        # Parse YOLO bbox
                         cx, cy, bw, bh = map(float, parts[1:])
 
-                        # Filter very small objects
-                        if bw * bh < min_area:
-                            continue
-
-                        # Add padding to bounding box for better context
-                        padding = 0.1  # 10% padding
+                        # Add padding (still keep object if it goes beyond)
+                        padding = 0.1
                         bw_padded = min(1.0, bw * (1 + padding))
                         bh_padded = min(1.0, bh * (1 + padding))
 
-                        # Convert to pixel coordinates
                         x1 = int(max(0, (cx - bw_padded / 2) * w))
                         y1 = int(max(0, (cy - bh_padded / 2) * h))
                         x2 = int(min(w, (cx + bw_padded / 2) * w))
                         y2 = int(min(h, (cy + bh_padded / 2) * h))
 
-                        # Skip invalid boxes
-                        if x2 <= x1 or y2 <= y1 or (x2 - x1) < 20 or (y2 - y1) < 20:
+                        if x2 <= x1 or y2 <= y1:
+                            print(f"⚠️ Invalid bbox in {img_file} ({x1},{y1},{x2},{y2})")
                             continue
 
-                        # Crop and resize object
                         cropped = image[y1:y2, x1:x2]
 
-                        # Resize to fixed size for consistency
-                        cropped_resized = cv2.resize(cropped, (224, 224))
+                        # Always resize (even if small)
+                        try:
+                            cropped_resized = cv2.resize(cropped, (224, 224))
+                        except Exception as e:
+                            print(f"⚠️ Resize failed for {img_file} obj{object_count}: {e}")
+                            continue
 
-                        # Determine target split (80% train, 20% val)
+                        # Random train/val split
                         target_split = "train" if np.random.random() < 0.8 else "val"
 
-                        # Save cropped object
                         save_filename = f"{os.path.splitext(img_file)[0]}_obj{object_count}.jpg"
                         save_path = os.path.join(
                             classification_dir, target_split, original_class_name, save_filename
@@ -304,7 +301,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": True,
                 "freeze_neck": False,
                 "lr": 0.001,
-                # "description": "Solo entrenar cabezal de clasificación",
+                "description": "Only training the head",
             },
             {
                 "name": "Phase 2: Partial Unfreezing",
@@ -312,7 +309,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": False,
                 "freeze_neck": True,
                 "lr": 0.0005,
-                # "description": "Descongelar backbone, mantener neck congelado",
+                "description": "Backbone unfrezing, the neck is still frozen",
             },
             {
                 "name": "Phase 3: Full Unfreezing",
@@ -320,7 +317,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": False,
                 "freeze_neck": False,
                 "lr": 0.0001,
-                # "description": "Entrenar todo el modelo con LR bajo",
+                "description": "Train all the model with a low LR",
             },
         ]
 
