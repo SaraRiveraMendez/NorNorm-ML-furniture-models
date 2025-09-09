@@ -24,7 +24,7 @@ from ultralytics import YOLO
 
 
 class ImprovedYOLOv12Classifier:
-    def __init__(self, model_size="n", img_size=640, batch_size=16):
+    def __init__(self, model_size="n", img_size=640, batch_size=8):
         self.model_size = model_size
         self.img_size = img_size
         self.batch_size = batch_size
@@ -629,7 +629,7 @@ def main():
         # Extract and clean objects
         print("\nStep 2: Extracting objects and removing background...")
         classification_dir = classifier.clean_and_extract_objects(
-            dataset_path, min_area=0.005, max_samples_per_class=3000
+            dataset_path, max_samples_per_class=10000
         )
 
         # Create YOLO config
