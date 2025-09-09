@@ -80,8 +80,34 @@ class ImprovedYOLOv12Classifier:
             print(f"Extraction failed: {e}")
             return None
 
+    def create_classification_labels(self, classification_dir):
+        """Create YOLO-compatible label files for classification dataset"""
+        print("Creating YOLO classification labels...")
+
+        for split in ["train", "val"]:
+            split_dir = os.path.join(classification_dir, split)
+            labels_dir = os.path.join(classification_dir, split, "labels")
+            os.makedirs(labels_dir, exist_ok=True)
+
+            for class_idx, class_name in enumerate(self.class_names):
+                class_dir = os.path.join(split_dir, class_name)
+                if not os.path.exists(class_dir):
+                    continue
+
+                for img_file in os.listdir(class_dir):
+                    if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                        # Create corresponding label file
+                        label_filename = os.path.splitext(img_file)[0] + ".txt"
+                        label_path = os.path.join(labels_dir, label_filename)
+
+                        # Write class index to label file
+                        with open(label_path, "w") as f:
+                            f.write(str(class_idx))
+
+        print("Label files created successfully")
+
     def clean_and_extract_objects(self, dataset_path, min_area=0.005, max_samples_per_class=5000):
-        """Extract objects from detection data and create proper classification structure"""
+        """Extract all objects from detection data and create proper classification structure"""
         print("Extracting and cleaning objects from detection annotations...")
 
         # Load class names and remove background if present
@@ -219,18 +245,8 @@ class ImprovedYOLOv12Classifier:
         for class_name, count in class_counts.items():
             print(f"  {class_name}: {count} objects")
 
-        # Calculate class distribution and weights
-        all_counts = list(class_counts.values())
-        if len(all_counts) > 0 and min(all_counts) > 0:
-            # Calculate inverse frequency weights
-            total_samples = sum(all_counts)
-            weights = {}
-            for class_name, count in class_counts.items():
-                weights[class_name] = total_samples / (len(self.class_names) * count)
-
-            print(f"\nCalculated class weights:")
-            for class_name, weight in weights.items():
-                print(f"  {class_name}: {weight:.3f}")
+        # Create YOLO-compatible label files
+        self.create_classification_labels(classification_dir)
 
         return classification_dir
 
@@ -241,7 +257,7 @@ class ImprovedYOLOv12Classifier:
             "train": "train",
             "val": "val",
             "nc": len(self.class_names),
-            "names": self.class_names,  # Direct list instead of dict
+            "names": self.class_names,
         }
 
         config_path = os.path.join(classification_dir, "dataset.yaml")
@@ -274,42 +290,6 @@ class ImprovedYOLOv12Classifier:
                 print(f"Error loading model: {e}")
                 return False
 
-    def freeze_layers(self, model, freeze_backbone=True, freeze_neck=False):
-        """Congelar capas específicas del modelo"""
-        if not hasattr(model, "model"):
-            return
-
-        model_layers = model.model
-
-        # Congelar backbone (primeras capas)
-        if freeze_backbone:
-            for i, layer in enumerate(model_layers):
-                if i < len(model_layers) * 0.7:  # Congela el 70% inicial del modelo
-                    for param in layer.parameters():
-                        param.requires_grad = False
-                    print(f"Frozen layer {i}")
-
-        # Congelar neck (capas intermedias) si se especifica
-        if freeze_neck:
-            for i, layer in enumerate(model_layers):
-                if len(model_layers) * 0.7 <= i < len(model_layers) * 0.9:
-                    for param in layer.parameters():
-                        param.requires_grad = False
-                    print(f"Frozen neck layer {i}")
-
-    def unfreeze_layers(self, model, unfreeze_from_layer=0):
-        """Descongelar capas desde una capa específica"""
-        if not hasattr(model, "model"):
-            return
-
-        model_layers = model.model
-
-        for i, layer in enumerate(model_layers):
-            if i >= unfreeze_from_layer:
-                for param in layer.parameters():
-                    param.requires_grad = True
-                print(f"Unfrozen layer {i}")
-
     def train_with_progressive_unfreezing(self, config_path, total_epochs=80):
         """Entrenamiento con descongelamiento progresivo"""
         print(f"Starting progressive unfreezing training...")
@@ -324,7 +304,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": True,
                 "freeze_neck": False,
                 "lr": 0.001,
-                "description": "Solo entrenar cabezal de clasificación",
+                # "description": "Solo entrenar cabezal de clasificación",
             },
             {
                 "name": "Phase 2: Partial Unfreezing",
@@ -332,7 +312,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": False,
                 "freeze_neck": True,
                 "lr": 0.0005,
-                "description": "Descongelar backbone, mantener neck congelado",
+                # "description": "Descongelar backbone, mantener neck congelado",
             },
             {
                 "name": "Phase 3: Full Unfreezing",
@@ -340,7 +320,7 @@ class ImprovedYOLOv12Classifier:
                 "freeze_backbone": False,
                 "freeze_neck": False,
                 "lr": 0.0001,
-                "description": "Entrenar todo el modelo con LR bajo",
+                # "description": "Entrenar todo el modelo con LR bajo",
             },
         ]
 
@@ -355,68 +335,64 @@ class ImprovedYOLOv12Classifier:
             current_epoch = 0
 
             for phase_idx, phase in enumerate(phases):
-                print(f"\n🚀 Starting {phase['name']}")
+                print(f"\nStarting {phase['name']}")
                 print(f"Epochs: {phase['epochs']}, Learning Rate: {phase['lr']}")
                 print("-" * 50)
 
-                # Configurar el congelamiento para esta fase
-                if phase_idx == 0:
-                    # Fase 1: Congelar backbone
-                    self.freeze_layers(self.model, freeze_backbone=True, freeze_neck=False)
-                elif phase_idx == 1:
-                    # Fase 2: Descongelar backbone, congelar neck
-                    self.unfreeze_layers(self.model, unfreeze_from_layer=0)
-                    self.freeze_layers(self.model, freeze_backbone=False, freeze_neck=True)
-                else:
-                    # Fase 3: Descongelar todo
-                    self.unfreeze_layers(self.model, unfreeze_from_layer=0)
+                # Training parameters for this phase
+                train_kwargs = {
+                    "data": config_path,
+                    "epochs": phase["epochs"],
+                    "imgsz": self.img_size,
+                    "batch": self.batch_size,
+                    "device": "cpu",  # Change to "0" if you have GPU
+                    "workers": 2,
+                    "patience": max(10, phase["epochs"] // 3),
+                    "save": True,
+                    "save_period": max(5, phase["epochs"] // 4),
+                    "val": True,
+                    "project": self.save_dir,
+                    "name": f"phase_{phase_idx + 1}_training",
+                    "exist_ok": True,
+                    "pretrained": True,
+                    "resume": phase_idx > 0,
+                    "optimizer": "AdamW",
+                    "lr0": phase["lr"],
+                    "lrf": 0.1,
+                    "momentum": 0.9,
+                    "weight_decay": 0.001,
+                    "warmup_epochs": min(3, phase["epochs"] // 5),
+                    "warmup_momentum": 0.8,
+                    "warmup_bias_lr": phase["lr"] * 0.1,
+                    "hsv_h": 0.01 if phase_idx == 0 else 0.02,
+                    "hsv_s": 0.5 if phase_idx == 0 else 0.7,
+                    "hsv_v": 0.3 if phase_idx == 0 else 0.4,
+                    "degrees": 5 if phase_idx == 0 else 10,
+                    "translate": 0.1 if phase_idx == 0 else 0.2,
+                    "scale": 0.3 if phase_idx == 0 else 0.5,
+                    "flipud": 0.3 if phase_idx == 0 else 0.5,
+                    "fliplr": 0.5,
+                    "mosaic": 0.0,
+                    "mixup": 0.0,
+                    "cls": 1.0,
+                    "box": 0.0,
+                    "dfl": 0.0,
+                    "verbose": True,
+                    "plots": True,
+                }
 
-                # Parámetros de entrenamiento para esta fase
-                phase_results = self.model.train(
-                    data=config_path,
-                    epochs=phase["epochs"],
-                    imgsz=self.img_size,
-                    batch=self.batch_size,
-                    device="cpu",  # Change to "0" if you have GPU
-                    workers=2,
-                    patience=max(10, phase["epochs"] // 3),
-                    save=True,
-                    save_period=max(5, phase["epochs"] // 4),
-                    val=True,
-                    project=self.save_dir,
-                    name=f"phase_{phase_idx + 1}_training",
-                    exist_ok=True,
-                    pretrained=True,
-                    resume=phase_idx > 0,  # Reanudar desde la fase anterior
-                    # Parámetros optimizados por fase
-                    optimizer="AdamW",
-                    lr0=phase["lr"],
-                    lrf=0.1,
-                    momentum=0.9,
-                    weight_decay=0.001,
-                    warmup_epochs=min(3, phase["epochs"] // 5),
-                    warmup_momentum=0.8,
-                    warmup_bias_lr=phase["lr"] * 0.1,
-                    # Data augmentation adaptativa por fase
-                    hsv_h=0.01 if phase_idx == 0 else 0.02,
-                    hsv_s=0.5 if phase_idx == 0 else 0.7,
-                    hsv_v=0.3 if phase_idx == 0 else 0.4,
-                    degrees=5 if phase_idx == 0 else 10,
-                    translate=0.1 if phase_idx == 0 else 0.2,
-                    scale=0.3 if phase_idx == 0 else 0.5,
-                    shear=0.0,
-                    perspective=0.0,
-                    flipud=0.3 if phase_idx == 0 else 0.5,
-                    fliplr=0.5,
-                    mosaic=0.0,
-                    mixup=0.0,
-                    # Loss weights
-                    cls=1.0,
-                    box=0.0,
-                    dfl=0.0,
-                    verbose=True,
-                    plots=True,
-                )
+                # Freezing configuration for this phase:
+                if phase_idx == 0:
+                    # Phase 1: Backbone freezing
+                    train_kwargs["freeze"] = 10  # Freeze first 10 layers
+                elif phase_idx == 1:
+                    # Phase 2: Ufreezing the backbone partially
+                    train_kwargs["freeze"] = 5  # Freeze first 5 layers
+                else:
+                    # Phase 3: Unfreeze everything
+                    train_kwargs["freeze"] = 0  # No freezing
+
+                phase_results = self.model.train(**train_kwargs)
 
                 current_epoch += phase["epochs"]
                 print(f"Completed {phase['name']}")
@@ -426,17 +402,17 @@ class ImprovedYOLOv12Classifier:
                 try:
                     val_results = self.model.val()
                     print(f"Phase {phase_idx + 1} validation completed")
+                    if hasattr(val_results, "top1"):
+                        print(f"Phase {phase_idx + 1} Top-1 Accuracy: {val_results.top1:.3f}")
                 except Exception as e:
                     print(f"Phase {phase_idx + 1} validation error: {e}")
 
-            print(f"\n🎉 Progressive unfreezing training completed!")
+            print(f"\nProgressive unfreezing training completed!")
             return phase_results
 
         except Exception as e:
             print(f"Progressive training failed: {e}")
             print("Trying fallback standard training...")
-
-            # Fallback a entrenamiento estándar
             return self.train_with_improved_params(config_path, total_epochs)
 
     def train_with_improved_params(self, config_path, epochs=80):
@@ -474,8 +450,6 @@ class ImprovedYOLOv12Classifier:
                 degrees=10,
                 translate=0.2,
                 scale=0.5,
-                shear=0.0,
-                perspective=0.0,
                 flipud=0.5,
                 fliplr=0.5,
                 mosaic=0.0,
@@ -498,28 +472,21 @@ class ImprovedYOLOv12Classifier:
         """Comprehensive evaluation"""
         print("Evaluating trained model...")
 
-        # Load best model from the final phase
-        possible_paths = [
-            os.path.join(self.save_dir, "phase_3_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "phase_2_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "phase_1_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "training_fallback", "weights", "best.pt"),
-        ]
-
-        best_model_path = None
-        for path in possible_paths:
-            if os.path.exists(path):
-                best_model_path = path
-                break
-
+        # Load best model
+        best_model_path = self.find_best_model()
         if best_model_path:
             self.model = YOLO(best_model_path)
             print(f"Loaded best model from: {best_model_path}")
 
         # Standard validation
-        results = self.model.val()
+        try:
+            results = self.model.val()
+            if hasattr(results, "top1"):
+                print(f"Validation Top-1 Accuracy: {results.top1:.3f}")
+        except Exception as e:
+            print(f"Validation error: {e}")
 
-        # Detailed evaluation on validation set
+        # Manual evaluation on validation set
         val_dir = os.path.join(classification_dir, "val")
         y_true = []
         y_pred = []
@@ -552,15 +519,7 @@ class ImprovedYOLOv12Classifier:
                                 # Get all probabilities for top-k calculation
                                 if hasattr(result.probs, "data"):
                                     probs = result.probs.data.cpu().numpy()
-                                    # Ensure we have the right number of classes
-                                    if len(probs) == len(self.class_names):
-                                        y_pred_probs.append(probs)
-                                    else:
-                                        # Pad or truncate to match class count
-                                        padded_probs = np.zeros(len(self.class_names))
-                                        min_len = min(len(probs), len(self.class_names))
-                                        padded_probs[:min_len] = probs[:min_len]
-                                        y_pred_probs.append(padded_probs)
+                                    y_pred_probs.append(probs)
 
                     except Exception as e:
                         print(f"Error predicting {img_path}: {e}")
@@ -572,29 +531,26 @@ class ImprovedYOLOv12Classifier:
 
         # Calculate metrics
         accuracy = np.mean(np.array(y_true) == np.array(y_pred))
-        print(f"Overall Accuracy: {accuracy:.4f}")
-
-        # Top-K accuracies
-        if y_pred_probs:
-            y_pred_probs = np.array(y_pred_probs)
-
-            try:
-                top1_acc = top_k_accuracy_score(y_true, y_pred_probs, k=1)
-                print(f"Top-1 Accuracy: {top1_acc:.4f}")
-            except:
-                print("Could not calculate Top-1 accuracy")
-
-            if len(self.class_names) >= 3:
-                try:
-                    top3_acc = top_k_accuracy_score(y_true, y_pred_probs, k=3)
-                    print(f"Top-3 Accuracy: {top3_acc:.4f}")
-                except:
-                    print("Could not calculate Top-3 accuracy")
+        print(f"Manual Evaluation Accuracy: {accuracy:.4f}")
 
         # Create confusion matrix
         self.create_confusion_matrix(y_true, y_pred)
 
         return accuracy
+
+    def find_best_model(self):
+        """Find the best model from training phases"""
+        possible_paths = [
+            os.path.join(self.save_dir, "phase_3_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "phase_2_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "phase_1_training", "weights", "best.pt"),
+            os.path.join(self.save_dir, "training_fallback", "weights", "best.pt"),
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        return None
 
     def create_confusion_matrix(self, y_true, y_pred):
         """Create detailed confusion matrix"""
@@ -668,7 +624,7 @@ def main():
     classifier = ImprovedYOLOv12Classifier(model_size="n", img_size=640, batch_size=8)
 
     try:
-        # Download dataset (you need to implement this method)
+        # Download dataset
         print("Step 1: Downloading dataset...")
         gdrive_file_id = "1M0e7oXsqs9BQRKxzBzMXKSUSg9JmHfzn"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
@@ -702,12 +658,6 @@ def main():
         print(f"{'='*70}")
         print(f"Final accuracy: {final_accuracy:.4f}")
         print(f"Results saved in: {classifier.save_dir}")
-        print("\nProgressive Unfreezing Applied:")
-        print("✓ Phase 1: Frozen backbone (first 1/3 epochs)")
-        print("✓ Phase 2: Unfrozen backbone + frozen neck (second 1/3 epochs)")
-        print("✓ Phase 3: Fully unfrozen with low LR (final 1/3 epochs)")
-        print("✓ Adaptive learning rates per phase")
-        print("✓ Progressive data augmentation intensity")
 
     except Exception as e:
         print(f"Training failed: {e}")
