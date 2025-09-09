@@ -106,7 +106,9 @@ class ImprovedYOLOv12Classifier:
 
         print("Label files created successfully")
 
-    def clean_and_extract_objects(self, dataset_path, min_area=0.0001, max_samples_per_class=10000):
+    def clean_and_extract_objects(
+        self, dataset_path, min_area=0.0001, max_samples_per_class=10000, val_split=0.2
+    ):
         """Clean YOLO detection dataset (remove background, invalid bboxes) and keep YOLO format."""
         print("Extracting and cleaning detection annotations...")
 
@@ -135,7 +137,7 @@ class ImprovedYOLOv12Classifier:
             if n in self.class_names
         }
 
-        # Prepare cleaned dataset dir - LIMPIAR PRIMERO
+        # Prepare cleaned dataset dir
         classification_dir = os.path.join(self.save_dir, "cleaned_dataset")
 
         # Eliminar directorio existente si está corrupto
@@ -144,84 +146,155 @@ class ImprovedYOLOv12Classifier:
 
         os.makedirs(classification_dir, exist_ok=True)
 
-        # NO crear data.yaml aquí - se hará en create_yolo_classification_config
-
         # Track counts
         class_counts = {name: 0 for name in self.class_names}
         total_labels, kept_labels = 0, 0
 
-        # Process splits
-        for split in ["train", "val", "valid"]:
-            images_dir = os.path.join(dataset_path, split, "images")
-            labels_dir = os.path.join(dataset_path, split, "labels")
+        # NUEVA LÓGICA: Procesar solo train y crear val automáticamente
+        train_images_dir = os.path.join(dataset_path, "train", "images")
+        train_labels_dir = os.path.join(dataset_path, "train", "labels")
 
-            if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
-                continue
+        if not os.path.exists(train_images_dir) or not os.path.exists(train_labels_dir):
+            raise FileNotFoundError("No se encontraron las carpetas train/images o train/labels")
 
-            print(f"Processing {split} split...")
+        print(f"Processing train split and creating {val_split*100:.0f}% validation split...")
 
-            new_images_dir = os.path.join(classification_dir, split, "images")
-            new_labels_dir = os.path.join(classification_dir, split, "labels")
-            os.makedirs(new_images_dir, exist_ok=True)
-            os.makedirs(new_labels_dir, exist_ok=True)
+        # Crear directorios de salida
+        new_train_images_dir = os.path.join(classification_dir, "train", "images")
+        new_train_labels_dir = os.path.join(classification_dir, "train", "labels")
+        new_val_images_dir = os.path.join(classification_dir, "val", "images")
+        new_val_labels_dir = os.path.join(classification_dir, "val", "labels")
 
-            for img_file in os.listdir(images_dir):
-                if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                    continue
+        for dir_path in [
+            new_train_images_dir,
+            new_train_labels_dir,
+            new_val_images_dir,
+            new_val_labels_dir,
+        ]:
+            os.makedirs(dir_path, exist_ok=True)
 
-                img_path = os.path.join(images_dir, img_file)
-                new_img_path = os.path.join(new_images_dir, img_file)
+        # Obtener todas las imágenes y hacer el split
+        all_images = [
+            f for f in os.listdir(train_images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
 
-                # Copy image
-                shutil.copy2(img_path, new_img_path)
+        # Crear split estratificado por clase si es posible
+        try:
+            # Intentar hacer un split estratificado
+            image_classes = []
+            valid_images = []
 
-                # Process label
+            for img_file in all_images:
                 label_file = os.path.splitext(img_file)[0] + ".txt"
-                old_label_path = os.path.join(labels_dir, label_file)
-                new_label_path = os.path.join(new_labels_dir, label_file)
+                label_path = os.path.join(train_labels_dir, label_file)
 
-                if not os.path.exists(old_label_path):
-                    continue
+                if os.path.exists(label_path):
+                    with open(label_path, "r") as f:
+                        lines = f.readlines()
 
-                with open(old_label_path, "r") as f:
-                    lines = f.readlines()
+                    # Tomar la primera clase válida encontrada para estratificar
+                    img_class = None
+                    for line in lines:
+                        parts = line.strip().split()
+                        if len(parts) == 5:
+                            class_id = int(parts[0])
+                            if class_id in id_map:
+                                img_class = id_map[class_id]
+                                break
 
-                new_lines = []
-                for line in lines:
-                    parts = line.strip().split()
-                    if len(parts) != 5:
-                        continue
+                    if img_class is not None:
+                        valid_images.append(img_file)
+                        image_classes.append(img_class)
 
-                    class_id = int(parts[0])
-                    if class_id not in id_map:
-                        continue
+            if len(valid_images) > 0 and len(set(image_classes)) > 1:
+                # Split estratificado
+                from sklearn.model_selection import train_test_split
 
-                    cx, cy, bw, bh = map(float, parts[1:])
+                train_imgs, val_imgs = train_test_split(
+                    valid_images, test_size=val_split, stratify=image_classes, random_state=42
+                )
+            else:
+                raise Exception("No se pudo hacer split estratificado")
 
-                    # Skip invalid
-                    if bw <= 0 or bh <= 0 or cx < 0 or cy < 0 or cx > 1 or cy > 1:
-                        continue
-                    if bw * bh < min_area:
-                        continue
+        except Exception as e:
+            print(f"Split estratificado falló: {e}. Usando split aleatorio...")
+            # Split aleatorio simple
+            from sklearn.model_selection import train_test_split
 
-                    new_id = id_map[class_id]
-                    new_lines.append(f"{new_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
-                    class_counts[self.class_names[new_id]] += 1
-                    kept_labels += 1
+            train_imgs, val_imgs = train_test_split(
+                all_images, test_size=val_split, random_state=42
+            )
 
-                total_labels += len(lines)
+        print(f"Split creado: {len(train_imgs)} train, {len(val_imgs)} val")
 
-                if new_lines:
+        # Procesar imágenes de entrenamiento
+        for img_file in train_imgs:
+            img_path = os.path.join(train_images_dir, img_file)
+            new_img_path = os.path.join(new_train_images_dir, img_file)
+
+            # Copy image
+            shutil.copy2(img_path, new_img_path)
+
+            # Process label
+            label_file = os.path.splitext(img_file)[0] + ".txt"
+            old_label_path = os.path.join(train_labels_dir, label_file)
+            new_label_path = os.path.join(new_train_labels_dir, label_file)
+
+            if os.path.exists(old_label_path):
+                processed_labels = self._process_label_file(old_label_path, id_map, min_area)
+                total_labels += processed_labels["total"]
+                kept_labels += processed_labels["kept"]
+
+                # Actualizar conteos por clase
+                for class_name, count in processed_labels["class_counts"].items():
+                    class_counts[class_name] += count
+
+                # Escribir labels procesados
+                if processed_labels["lines"]:
                     with open(new_label_path, "w") as f:
-                        f.writelines(new_lines)
+                        f.writelines(processed_labels["lines"])
+
+        # Procesar imágenes de validación
+        for img_file in val_imgs:
+            img_path = os.path.join(train_images_dir, img_file)
+            new_img_path = os.path.join(new_val_images_dir, img_file)
+
+            # Copy image
+            shutil.copy2(img_path, new_img_path)
+
+            # Process label
+            label_file = os.path.splitext(img_file)[0] + ".txt"
+            old_label_path = os.path.join(train_labels_dir, label_file)
+            new_label_path = os.path.join(new_val_labels_dir, label_file)
+
+            if os.path.exists(old_label_path):
+                processed_labels = self._process_label_file(old_label_path, id_map, min_area)
+                total_labels += processed_labels["total"]
+                kept_labels += processed_labels["kept"]
+
+                # Actualizar conteos por clase
+                for class_name, count in processed_labels["class_counts"].items():
+                    class_counts[class_name] += count
+
+                # Escribir labels procesados
+                if processed_labels["lines"]:
+                    with open(new_label_path, "w") as f:
+                        f.writelines(processed_labels["lines"])
 
         print(f"\nObject cleaning summary:")
         print(f"Original labels: {total_labels}")
         print(f"Kept labels: {kept_labels}")
+        print(f"Train/Val split: {len(train_imgs)}/{len(val_imgs)}")
         for cls, count in class_counts.items():
             print(f"  {cls}: {count} objects")
 
-        return classification_dir  # Retornar solo el directorio, no el archivo yaml
+        return classification_dir
+
+
+def _process_label_file(self, label_path, id_map, min_area):
+    """Helper method to process individual label files"""
+    with open(label_path, "r") as f:
+        lines = f.readlines()
 
     def create_yolo_classification_config(self, classification_dir):
         """Create YOLO classification configuration"""
@@ -611,10 +684,10 @@ def main():
         gdrive_file_id = "1M0e7oXsqs9BQRKxzBzMXKSUSg9JmHfzn"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
-        # Extract and clean objects
-        print("\nStep 2: Extracting objects and removing background...")
+        # Extract and clean objects (con split automático)
+        print("\nStep 2: Extracting objects, removing background, and creating train/val split...")
         classification_dir = classifier.clean_and_extract_objects(
-            dataset_path, max_samples_per_class=10000
+            dataset_path, max_samples_per_class=10000, val_split=0.2  # 20% para validación
         )
 
         # Create YOLO config
@@ -629,7 +702,7 @@ def main():
 
         # Train with progressive unfreezing
         print("\nStep 5: Training with progressive unfreezing...")
-        results = classifier.train_with_progressive_unfreezing(config_path, total_epochs=80)
+        results = classifier.train_with_progressive_unfreezing(config_path, total_epochs=100)
 
         # Evaluate
         print("\nStep 6: Comprehensive evaluation...")
@@ -638,7 +711,12 @@ def main():
         print(f"\n{'='*70}")
         print("PROGRESSIVE UNFREEZING TRAINING COMPLETED!")
         print(f"{'='*70}")
-        print(f"Final accuracy: {final_accuracy:.4f}")
+
+        if final_accuracy is not None:
+            print(f"Final accuracy: {final_accuracy:.4f}")
+        else:
+            print("Final accuracy: Could not calculate (evaluation failed)")
+
         print(f"Results saved in: {classifier.save_dir}")
 
     except Exception as e:
