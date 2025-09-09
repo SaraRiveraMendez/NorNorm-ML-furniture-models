@@ -236,7 +236,8 @@ class ImprovedYOLOv12Classifier:
             "names": self.class_names,
         }
 
-        config_path = os.path.join(classification_dir, "dataset.yaml")
+        config_path = os.path.join(classification_dir, "data.yaml")
+
         with open(config_path, "w") as f:
             yaml.dump(config, f, default_flow_style=False)
 
