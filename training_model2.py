@@ -806,7 +806,9 @@ class WeightedYOLOv12Classifier:
             # Display phase information
             unfrozen_count = sum(1 for param in self.total_params if param.requires_grad)
             frozen_count = self.total_layer_count - unfrozen_count
-            unfrozen_percentage = (unfrozen_count / self.total_layer_count) * 100
+            unfrozen_percentage = (
+                (unfrozen_count / self.total_layer_count) * 100 if self.total_layer_count > 0 else 0
+            )
 
             print(f"Phase {i+1} configuration:")
             print(f"  Epochs: {phase_epochs}")
