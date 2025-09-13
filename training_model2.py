@@ -1144,7 +1144,7 @@ def main():
         classifier = WeightedYOLOv12Classifier(model_size="n", img_size=640, batch_size=16)
 
         # Steps 1-3: Dataset download, cleaning, and model initialization
-        gdrive_file_id = "1DjNhyBMEcnuF-jpgUdBuJxjRmWHSNIwu"
+        gdrive_file_id = "1zvCNOz4P0QFdOAfpDpSpidFVjXHFxDUE"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
         classification_path = classifier.clean_and_extract_objects(
             dataset_path, min_area=0.0001, max_samples_per_class=15000, val_split=0.2
