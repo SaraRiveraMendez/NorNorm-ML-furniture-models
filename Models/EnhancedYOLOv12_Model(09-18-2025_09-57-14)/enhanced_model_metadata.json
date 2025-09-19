@@ -1,0 +1,70 @@
+{
+  "model_type": "Enhanced Weighted YOLOv12n Classifier",
+  "original_classes": [
+    "LOUNGE",
+    "MEETING-TABLE",
+    "PHONEBOOTH",
+    "PLANTS",
+    "PRIVATE-DESK",
+    "REST-FOR-1",
+    "REST-FOR-2",
+    "ROUND-TABLE",
+    "STORAGE"
+  ],
+  "final_classes": [
+    "lounge",
+    "meeting-table",
+    "phonebooth",
+    "plants",
+    "private-desk",
+    "rest-for-1",
+    "rest-for-2",
+    "round-table",
+    "storage"
+  ],
+  "class_mapping": {
+    "0": 0,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4,
+    "5": 5,
+    "6": 6,
+    "7": 7,
+    "8": 8
+  },
+  "confidence_thresholds": {
+    "training": 0.25,
+    "validation": 0.4,
+    "inference": 0.5,
+    "strict": 0.7
+  },
+  "current_confidence": 0.1,
+  "img_size": 640,
+  "batch_size": 12,
+  "num_original_classes": 9,
+  "num_final_classes": 9,
+  "class_weights_applied": {
+    "0": 3.8075616094120335,
+    "1": 1.30003705003705,
+    "2": 7.078462600201731,
+    "3": 1.6738472740054482,
+    "4": 0.19327648261936548,
+    "5": 3.0136741705089958,
+    "6": 3.5307965257917595,
+    "7": 3.4073648165184505,
+    "8": 0.8718426541647868
+  },
+  "training_timestamp": "2025-09-18T16:46:44.127482",
+  "save_directory": "Models/EnhancedYOLOv12_Model(09-18-2025_09-57-14)",
+  "model_path": "Models/EnhancedYOLOv12_Model(09-18-2025_09-57-14)/enhanced_phase_1/weights/best.pt",
+  "enhanced_features": [
+    "Optimized confidence threshold management",
+    "Automatic confidence threshold optimization",
+    "Advanced overlapping bounding box handling with multiple strategies",
+    "Progressive unfreezing with class weights",
+    "Enhanced prediction interface with confidence types",
+    "Comprehensive overlap statistics and analysis",
+    "Multi-strategy overlap resolution (NMS, merge, largest, highest confidence)"
+  ]
+}
