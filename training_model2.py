@@ -363,8 +363,15 @@ class AdaptiveWeightedYOLOv12Classifier:
             return None
 
         if unfreeze_schedule is None:
-            unfreeze_schedule = {0: 0.08, 25: 0.20, 50: 0.35, 75: 0.50, 100: 0.70, 125: 0.85, 150: 1.0}
-}}
+            unfreeze_schedule = {
+                0: 0.08,
+                25: 0.20,
+                50: 0.35,
+                75: 0.50,
+                100: 0.70,
+                125: 0.85,
+                150: 1.0,
+            }
 
         print("Setting up corrected progressive unfreezing...")
 
@@ -631,7 +638,7 @@ class AdaptiveWeightedYOLOv12Classifier:
             "verbose": True,
             "dropout": 0.2,
             "label_smoothing": 0.1,
-            "conf": self.default_conf
+            "conf": self.default_conf,
         }
 
         # Phase-based training with corrected unfreezing
