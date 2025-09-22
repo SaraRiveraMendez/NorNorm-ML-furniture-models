@@ -363,7 +363,8 @@ class AdaptiveWeightedYOLOv12Classifier:
             return None
 
         if unfreeze_schedule is None:
-            unfreeze_schedule = {0: 0.10, 20: 0.25, 40: 0.45, 65: 0.70, 90: 0.85, 110: 1.0}
+            unfreeze_schedule = {0: 0.08, 25: 0.20, 50: 0.35, 75: 0.50, 100: 0.70, 125: 0.85, 150: 1.0}
+}}
 
         print("Setting up corrected progressive unfreezing...")
 
@@ -559,7 +560,7 @@ class AdaptiveWeightedYOLOv12Classifier:
     def train_model_with_corrected_progressive_unfreezing_and_class_weights(
         self,
         classification_path,
-        epochs=125,
+        epochs=160,
         unfreeze_schedule=None,
         auto_optimize_confidence=True,
         adaptive_overlap_enabled=True,
@@ -611,24 +612,26 @@ class AdaptiveWeightedYOLOv12Classifier:
             "batch": self.batch_size,
             "device": "cpu",
             "workers": 4,
-            "patience": 20,
+            "patience": 15,
             "save": True,
             "save_period": 10,
             "val": True,
             "project": self.save_dir,
             "exist_ok": True,
             "pretrained": True,
-            "optimizer": "AdamW",
-            "lr0": 0.001,
-            "lrf": 0.01,
-            "momentum": 0.937,
-            "weight_decay": 0.0005,
-            "warmup_epochs": 3,
+            "optimizer": "SGD",
+            "lr0": 0.005,
+            "lrf": 0.0001,
+            "momentum": 0.9,
+            "weight_decay": 0.001,
+            "warmup_epochs": 8,
             "warmup_momentum": 0.8,
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
-            "conf": self.default_conf,
+            "dropout": 0.2,
+            "label_smoothing": 0.1,
+            "conf": self.default_conf
         }
 
         # Phase-based training with corrected unfreezing
@@ -1386,12 +1389,12 @@ def main_adaptive():
             raise RuntimeError("Failed to initialize YOLOv12 model")
 
         print("\nStep 4: Adaptive training with corrected progressive unfreezing...")
-        custom_schedule = {0: 0.10, 20: 0.25, 40: 0.45, 65: 0.70, 90: 0.85, 110: 1.0}
+        custom_schedule = {0: 0.08, 25: 0.20, 50: 0.35, 75: 0.50, 100: 0.70, 125: 0.85, 150: 1.0}
 
         training_results = (
             classifier.train_model_with_corrected_progressive_unfreezing_and_class_weights(
                 classification_path,
-                epochs=125,
+                epochs=160,
                 unfreeze_schedule=custom_schedule,
                 auto_optimize_confidence=True,
                 adaptive_overlap_enabled=True,
