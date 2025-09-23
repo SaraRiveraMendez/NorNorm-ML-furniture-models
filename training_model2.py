@@ -564,6 +564,67 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         return False
 
+    def apply_confidence_by_context(self, context, phase_name=None):
+        """
+        Apply appropriate confidence threshold based on context.
+
+        Args:
+            context (str): 'training', 'validation', 'inference'
+            phase_name (str): Optional phase name for context-aware inference
+
+        Returns:
+            float: Applied confidence threshold
+        """
+        if context == "training":
+            # Training always uses low threshold to see all examples
+            conf = 0.001
+            print(f"Applied training confidence (no filtering): {conf}")
+
+        elif context == "validation":
+            # Validation uses phase-appropriate thresholds
+            if phase_name and ("phase_1" in phase_name or "phase_2" in phase_name):
+                conf = self.confidence_thresholds["training"]
+            elif phase_name and ("phase_3" in phase_name or "phase_4" in phase_name):
+                conf = self.confidence_thresholds["validation"]
+            else:
+                conf = self.confidence_thresholds["inference"]
+            print(f"Applied validation confidence: {conf}")
+
+        elif context == "inference":
+            # Production inference uses conservative thresholds
+            conf = self.confidence_thresholds["inference"]
+            print(f"Applied inference confidence: {conf}")
+
+        else:
+            conf = self.confidence_thresholds["inference"]
+            print(f"Applied default confidence: {conf}")
+
+        return conf
+
+    def confidence_threshold(self):
+        """
+        Simple confidence threshold setter that uses phase-based thresholds.
+
+        Args:
+            classification_path (str): Path to validation dataset (not used)
+            threshold_range (tuple): Not used, kept for compatibility
+            step (float): Not used, kept for compatibility
+
+        Returns:
+            dict: Current confidence configuration
+        """
+        print("Using phase-based confidence thresholds instead of optimization")
+        print("Current confidence thresholds:")
+        for phase_type, threshold in self.confidence_thresholds.items():
+            print(f"  {phase_type}: {threshold}")
+
+        return {
+            "confidence_thresholds": self.confidence_thresholds,
+            "current_threshold": self.default_conf,
+            "method": "phase_based",
+            "optimization_date": datetime.datetime.now().isoformat(),
+        }
+
     def train_model_with_corrected_progressive_unfreezing_and_class_weights(
         self,
         classification_path,
@@ -681,12 +742,17 @@ class AdaptiveWeightedYOLOv12Classifier:
                     self.patch_model_loss()
                     self._apply_unfreezing_phase(phase_start_epoch)
 
+            # Apply confidence threshold
+            phase_name = f"adaptive_phase_{i+1}"
+            current_conf = self.apply_confidence_by_context(phase_name)
+
             # Configure training for this phase
             phase_training_args = base_training_args.copy()
             phase_training_args.update(
                 {
                     "epochs": phase_epochs,
                     "name": f"adaptive_phase_{i+1}",
+                    "conf": current_conf,
                 }
             )
 
@@ -713,7 +779,7 @@ class AdaptiveWeightedYOLOv12Classifier:
             print(f"\n{'='*50}")
             print("POST-TRAINING CONFIDENCE OPTIMIZATION")
             print(f"{'='*50}")
-            optimization_results = self.optimize_confidence_threshold(classification_path)
+            optimization_results = self.confidence_threshold(classification_path)
 
         # Save overlap analytics
         self.save_overlap_analytics()
@@ -860,98 +926,6 @@ class AdaptiveWeightedYOLOv12Classifier:
     def _keep_highest_confidence_boxes(self, boxes, iou_threshold):
         """Keep the highest confidence box among overlapping boxes."""
         return self._apply_nms(boxes, iou_threshold)
-
-    def optimize_confidence_threshold(self, validation_path, threshold_range=(0.1, 0.9), step=0.05):
-        """
-        Automatically find optimal confidence threshold based on validation data.
-        """
-        if self.model is None:
-            print("Error: Model not initialized for threshold optimization")
-            return None
-
-        print("Optimizing confidence threshold...")
-
-        thresholds = np.arange(threshold_range[0], threshold_range[1] + step, step)
-        results = []
-
-        val_images_path = os.path.join(validation_path, "val", "images")
-        if not os.path.exists(val_images_path):
-            print(f"Validation images not found at: {val_images_path}")
-            return None
-
-        val_images = [
-            f for f in os.listdir(val_images_path) if f.lower().endswith((".jpg", ".jpeg", ".png"))
-        ][:100]
-
-        print(f"Testing {len(thresholds)} thresholds on {len(val_images)} validation images...")
-
-        for threshold in thresholds:
-            correct_predictions = 0
-            total_predictions = 0
-            confident_predictions = 0
-
-            for img_file in val_images:
-                img_path = os.path.join(val_images_path, img_file)
-
-                true_class_idx = None
-                for class_idx, class_name in enumerate(self.class_names):
-                    if class_name.lower() in img_file.lower():
-                        true_class_idx = class_idx
-                        break
-
-                if true_class_idx is None:
-                    continue
-
-                try:
-                    results_pred = self.model.predict(img_path, verbose=False, conf=threshold)
-
-                    if results_pred and len(results_pred) > 0:
-                        probs = results_pred[0].probs
-                        if probs is not None:
-                            confident_predictions += 1
-                            predicted_class = probs.top1
-                            if predicted_class == true_class_idx:
-                                correct_predictions += 1
-
-                    total_predictions += 1
-
-                except Exception:
-                    continue
-
-            accuracy = correct_predictions / max(total_predictions, 1)
-            confidence_rate = confident_predictions / max(total_predictions, 1)
-            combined_score = accuracy * 0.7 + confidence_rate * 0.3
-
-            results.append(
-                {
-                    "threshold": threshold,
-                    "accuracy": accuracy,
-                    "confidence_rate": confidence_rate,
-                    "combined_score": combined_score,
-                    "correct_predictions": correct_predictions,
-                    "total_predictions": total_predictions,
-                }
-            )
-
-        best_result = max(results, key=lambda x: x["combined_score"])
-        optimal_threshold = best_result["threshold"]
-        self.default_conf = optimal_threshold
-
-        optimization_results = {
-            "optimal_threshold": optimal_threshold,
-            "best_metrics": best_result,
-            "all_results": results,
-            "optimization_date": datetime.datetime.now().isoformat(),
-        }
-
-        results_path = os.path.join(self.save_dir, "threshold_optimization.json")
-        with open(results_path, "w") as f:
-            json.dump(optimization_results, f, indent=2)
-
-        print(f"Optimal confidence threshold found: {optimal_threshold}")
-        print(f"Optimization results saved to: {results_path}")
-
-        return optimization_results
 
     def save_overlap_analytics(self):
         """Save overlap handling analytics to file."""
@@ -1257,7 +1231,12 @@ class AdaptiveWeightedYOLOv12Classifier:
         }
 
     def _calculate_class_weights(self, class_counts):
-        """Calculate class weights for imbalanced datasets."""
+        """
+        Calculate more aggressive class weights for extreme imbalance handling.
+
+        Args:
+            class_counts (dict): Dictionary with class counts
+        """
         if not class_counts or sum(class_counts.values()) == 0:
             return
 
@@ -1265,26 +1244,58 @@ class AdaptiveWeightedYOLOv12Classifier:
         if len(valid_classes) == 0:
             return
 
+        # Calculate base weights
         counts = np.array([valid_classes[name] for name in valid_classes.keys()])
         class_labels = np.arange(len(valid_classes))
 
-        weights = compute_class_weight(
+        # Use more aggressive rebalancing
+        base_weights = compute_class_weight(
             class_weight="balanced", classes=class_labels, y=np.repeat(class_labels, counts)
         )
 
+        # Apply additional strict balancing
+        max_count = max(counts)
+        min_count = min(counts)
+        imbalance_ratio = max_count / min_count
+
+        print(f"Class imbalance ratio: {imbalance_ratio:.2f}")
+
+        # More aggressive weighting for severe imbalance
+        if imbalance_ratio > 10:
+            # Square root weighting for extreme cases
+            strict_weights = np.sqrt(max_count / counts)
+            print("Applied square root aggressive weighting")
+        elif imbalance_ratio > 5:
+            # Linear aggressive weighting
+            strict_weights = (max_count / counts) * 0.8
+            print("Applied linear aggressive weighting")
+        else:
+            # Standard balanced weighting
+            strict_weights = base_weights
+            print("Applied standard balanced weighting")
+
+        # Ensure weights don't become too extreme
+        strict_weights = np.clip(strict_weights, 0.1, 10.0)
+
+        # Store weights
         self.class_weights = {}
-        default_weight = np.mean(weights) if len(weights) > 0 else 1.0
+        default_weight = np.mean(strict_weights) if len(strict_weights) > 0 else 1.0
         valid_class_names = list(valid_classes.keys())
 
         for i, class_name in enumerate(self.class_names):
             if class_name in valid_class_names:
                 weight_idx = valid_class_names.index(class_name)
-                self.class_weights[i] = float(weights[weight_idx])
+                self.class_weights[i] = float(strict_weights[weight_idx])
             else:
                 self.class_weights[i] = default_weight
 
         weight_values = [self.class_weights[i] for i in range(len(self.class_names))]
         self.class_weights_tensor = torch.FloatTensor(weight_values)
+
+        print("Strict class weights calculated:")
+        for i, (class_name, weight) in enumerate(zip(self.class_names, weight_values)):
+            sample_count = class_counts.get(class_name, 0)
+            print(f"  {class_name}: {weight:.3f} (samples: {sample_count})")
 
     def create_yolo_classification_config(self, classification_dir):
         """Create YOLO classification configuration file."""
@@ -1388,7 +1399,7 @@ def main_adaptive():
             min_area=0.0001,
             max_samples_per_class=15000,
             val_split=0.2,
-            overlap_threshold=0.5,
+            overlap_threshold=0.4,
         )
 
         print("\nStep 3: Initializing YOLOv12 model...")
