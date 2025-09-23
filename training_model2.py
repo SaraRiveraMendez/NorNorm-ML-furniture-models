@@ -1390,7 +1390,7 @@ def main_adaptive():
         classifier = AdaptiveWeightedYOLOv12Classifier(model_size="n", img_size=640, batch_size=12)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "1zvCNOz4P0QFdOAfpDpSpidFVjXHFxDUE"
+        gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
         dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Adaptive dataset cleaning...")
