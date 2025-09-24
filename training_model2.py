@@ -575,19 +575,18 @@ class AdaptiveWeightedYOLOv12Classifier:
         """
         if phase_number <= 2:
             # Early phases: more permissive for learning
-            conf = self.confidence_thresholds["training"]  # 0.25
+            conf = self.confidence_thresholds["training"]
             phase_type = "training"
         elif phase_number <= 4:
             # Mid phases: moderate filtering
-            conf = self.confidence_thresholds["validation"]  # 0.5
+            conf = self.confidence_thresholds["validation"]
             phase_type = "validation"
         elif phase_number <= 6:
             # Late phases: stricter filtering
-            conf = self.confidence_thresholds["inference"]  # 0.5
-            phase_type = "inference"
+            conf = self.confidence_thresholds["inference"]
         else:
             # Final phases: strictest filtering
-            conf = self.confidence_thresholds["strict"]  # 0.6
+            conf = self.confidence_thresholds["strict"]
             phase_type = "strict"
 
         self.default_conf = conf
@@ -1305,6 +1304,45 @@ class AdaptiveWeightedYOLOv12Classifier:
         print(f"  Weight std: {np.std(weight_values):.3f}")
 
         return aggressive_weights
+
+    def initialize_yolov12_classifier(self):
+        """
+        Initialize YOLOv12 model for classification with class weights.
+
+        Returns:
+            bool: True if initialization successful, False otherwise
+        """
+        if len(self.class_names) == 0:
+            print("Error: No classes defined. Cannot initialize model.")
+            return False
+
+        try:
+            model_name = f"yolo12{self.model_size}-cls.pt"
+            print(f"Attempting to load {model_name}...")
+            self.model = YOLO(model_name)
+            print(f"YOLOv12{self.model_size} Classification model initialized successfully")
+
+            if self.class_weights_tensor is not None:
+                self.patch_model_loss()
+
+            return True
+
+        except Exception as e:
+            print(f"Error initializing YOLOv12 classifier: {e}")
+            try:
+                model_name = f"yolo12{self.model_size}.pt"
+                print(f"Trying fallback detection model: {model_name}")
+                self.model = YOLO(model_name)
+                print(f"Using YOLOv12{self.model_size} detection model as fallback")
+
+                if self.class_weights_tensor is not None:
+                    self.patch_model_loss()
+
+                return True
+
+            except Exception as e2:
+                print(f"Error with fallback model: {e2}")
+                return False
 
     def patch_model_loss(self):
         if self.model is None or self.class_weights_tensor is None:
