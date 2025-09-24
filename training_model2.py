@@ -693,7 +693,10 @@ class AdaptiveWeightedYOLOv12Classifier:
             # Apply unfreezing for this phase
             unfreezing_changed = self._apply_unfreezing_phase(phase_start_epoch)
 
-            # Load previous checkpoint if continuing
+            # Initialize current_conf with default value for first phase
+            current_conf = self.default_conf
+
+            # Load previous checkpoint if continuing (for phases after the first)
             if i > 0:
                 previous_phase_name = f"adaptive_phase_{i}"
                 last_checkpoint = os.path.join(
@@ -707,12 +710,11 @@ class AdaptiveWeightedYOLOv12Classifier:
                     self.patch_model_loss()
                     self._apply_unfreezing_phase(phase_start_epoch)
 
-                # Apply confidence threshold
-                phase_name = f"adaptive_phase_{i+1}"
+                # Apply confidence threshold for phases after the first
                 current_conf = self.apply_confidence_by_phase(i + 1)
 
-            # Validate weights in every phase
-            if i == 0:  # Just the first time
+            # Validate weights in every phase (only first time for i == 0)
+            if i == 0:
                 self.validate_weight_application()
 
             # Configure training for this phase
@@ -721,7 +723,6 @@ class AdaptiveWeightedYOLOv12Classifier:
                 {
                     "epochs": phase_epochs,
                     "name": f"adaptive_phase_{i+1}",
-                    # "phase_name": phase_name,
                     "conf": current_conf,
                 }
             )
