@@ -721,7 +721,7 @@ class AdaptiveWeightedYOLOv12Classifier:
                 {
                     "epochs": phase_epochs,
                     "name": f"adaptive_phase_{i+1}",
-                    "phase_name": phase_name,
+                    # "phase_name": phase_name,
                     "conf": current_conf,
                 }
             )
