@@ -1305,6 +1305,45 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         return aggressive_weights
 
+    def create_yolo_classification_config(self, classification_dir):
+        """
+        Create YOLO classification configuration file.
+
+        Args:
+            classification_dir (str): Path to classification dataset
+
+        Returns:
+            str: Path to configuration file
+        """
+        if len(self.class_names) == 0:
+            raise ValueError("No valid classes found. Cannot create YOLO config.")
+
+        config = {
+            "path": os.path.abspath(classification_dir),
+            "train": "train",
+            "val": "val",
+            "nc": len(self.class_names),
+            "names": self.class_names,
+        }
+
+        config_path = os.path.join(classification_dir, "data.yaml")
+
+        if os.path.exists(config_path) and not os.path.isfile(config_path):
+            print(f"Warning: {config_path} exists but is not a file. Removing...")
+            if os.path.isdir(config_path):
+                shutil.rmtree(config_path)
+            else:
+                os.remove(config_path)
+
+        with open(config_path, "w") as f:
+            yaml.safe_dump(config, f)
+
+        print(f"YOLO classification config saved: {config_path}")
+        print(f"Number of classes: {len(self.class_names)}")
+        print(f"Classes: {self.class_names}")
+
+        return config_path
+
     def initialize_yolov12_classifier(self):
         """
         Initialize YOLOv12 model for classification with class weights.
