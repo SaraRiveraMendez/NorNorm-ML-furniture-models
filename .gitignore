@@ -48,6 +48,8 @@ dataset_/
 furni-detect3/
 furni-set-detect*/
 furni-set-detect-opti/
+Models/AdaptiveYOLOv12_Model(09-19-2025_12-36-27)/
+Models/AdaptiveYOLOv12_Model(09-22-2025_10-16-01)/
 
 # Installer logs
 pip-log.txt

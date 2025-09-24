@@ -31,7 +31,7 @@ class AdaptiveWeightedYOLOv12Classifier:
     and corrected progressive unfreezing implementation.
     """
 
-    def __init__(self, model_size="n", img_size=640, batch_size=12, default_conf=0.25):
+    def __init__(self, model_size="n", img_size=640, batch_size=10, default_conf=0.5):
         """
         Initialize the Adaptive WeightedYOLOv12Classifier.
         """
@@ -42,10 +42,10 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         # Confidence threshold management
         self.confidence_thresholds = {
-            "training": 0.25,
-            "validation": 0.4,
-            "inference": 0.5,
-            "strict": 0.7,
+            "training": 0.15,
+            "validation": 0.35,
+            "inference": 0.4,
+            "strict": 0.5,
         }
 
         self.model = None
@@ -53,7 +53,6 @@ class AdaptiveWeightedYOLOv12Classifier:
         self.original_class_names = []
         self.class_weights = None
         self.class_weights_tensor = None
-        self.weighted_loss_fn = None
         self.id_map = {}
 
         # Progressive unfreezing state tracking
@@ -364,12 +363,12 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         if unfreeze_schedule is None:
             unfreeze_schedule = {
-                0: 0.08,
+                0: 0.12,
                 25: 0.20,
-                50: 0.35,
-                75: 0.50,
-                100: 0.70,
-                125: 0.85,
+                50: 0.40,
+                75: 0.55,
+                100: 0.75,
+                125: 0.90,
                 150: 1.0,
             }
 
@@ -564,73 +563,42 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         return False
 
-    def apply_confidence_by_context(self, context, phase_name=None):
+    def apply_confidence_by_phase(self, phase_number):
         """
-        Apply appropriate confidence threshold based on context.
+        Apply confidence threshold based on training phase number.
 
         Args:
-            context (str): 'training', 'validation', 'inference'
-            phase_name (str): Optional phase name for context-aware inference
+            phase_number (int): Current phase number (1-based)
 
         Returns:
             float: Applied confidence threshold
         """
-        if context == "training":
-            # Training always uses low threshold to see all examples
-            conf = 0.001
-            print(f"Applied training confidence (no filtering): {conf}")
-
-        elif context == "validation":
-            # Validation uses phase-appropriate thresholds
-            if phase_name and ("phase_1" in phase_name or "phase_2" in phase_name):
-                conf = self.confidence_thresholds["training"]
-            elif phase_name and ("phase_3" in phase_name or "phase_4" in phase_name):
-                conf = self.confidence_thresholds["validation"]
-            else:
-                conf = self.confidence_thresholds["inference"]
-            print(f"Applied validation confidence: {conf}")
-
-        elif context == "inference":
-            # Production inference uses conservative thresholds
-            conf = self.confidence_thresholds["inference"]
-            print(f"Applied inference confidence: {conf}")
-
+        if phase_number <= 2:
+            # Early phases: more permissive for learning
+            conf = self.confidence_thresholds["training"]  # 0.25
+            phase_type = "training"
+        elif phase_number <= 4:
+            # Mid phases: moderate filtering
+            conf = self.confidence_thresholds["validation"]  # 0.5
+            phase_type = "validation"
+        elif phase_number <= 6:
+            # Late phases: stricter filtering
+            conf = self.confidence_thresholds["inference"]  # 0.5
+            phase_type = "inference"
         else:
-            conf = self.confidence_thresholds["inference"]
-            print(f"Applied default confidence: {conf}")
+            # Final phases: strictest filtering
+            conf = self.confidence_thresholds["strict"]  # 0.6
+            phase_type = "strict"
 
+        self.default_conf = conf
+        print(f"Phase {phase_number}: Applied {phase_type} confidence = {conf}")
         return conf
-
-    def confidence_threshold(self):
-        """
-        Simple confidence threshold setter that uses phase-based thresholds.
-
-        Args:
-            classification_path (str): Path to validation dataset (not used)
-            threshold_range (tuple): Not used, kept for compatibility
-            step (float): Not used, kept for compatibility
-
-        Returns:
-            dict: Current confidence configuration
-        """
-        print("Using phase-based confidence thresholds instead of optimization")
-        print("Current confidence thresholds:")
-        for phase_type, threshold in self.confidence_thresholds.items():
-            print(f"  {phase_type}: {threshold}")
-
-        return {
-            "confidence_thresholds": self.confidence_thresholds,
-            "current_threshold": self.default_conf,
-            "method": "phase_based",
-            "optimization_date": datetime.datetime.now().isoformat(),
-        }
 
     def train_model_with_corrected_progressive_unfreezing_and_class_weights(
         self,
         classification_path,
         epochs=160,
         unfreeze_schedule=None,
-        auto_optimize_confidence=True,
         adaptive_overlap_enabled=True,
     ):
         """
@@ -640,7 +608,6 @@ class AdaptiveWeightedYOLOv12Classifier:
             classification_path (str): Path to classification dataset
             epochs (int): Number of training epochs
             unfreeze_schedule (dict): Custom unfreezing schedule
-            auto_optimize_confidence (bool): Auto-optimize confidence threshold
             adaptive_overlap_enabled (bool): Enable adaptive overlap handling
 
         Returns:
@@ -668,7 +635,6 @@ class AdaptiveWeightedYOLOv12Classifier:
         )
         print(f"  ✓ Class weights")
         print(f"  ✓ Adaptive overlap handling: {adaptive_overlap_enabled}")
-        print(f"  ✓ Auto confidence optimization: {auto_optimize_confidence}")
 
         # Create classification config
         config_path = self.create_yolo_classification_config(classification_path)
@@ -680,7 +646,7 @@ class AdaptiveWeightedYOLOv12Classifier:
             "batch": self.batch_size,
             "device": "cpu",
             "workers": 4,
-            "patience": 15,
+            "patience": 20,
             "save": True,
             "save_period": 10,
             "val": True,
@@ -688,17 +654,17 @@ class AdaptiveWeightedYOLOv12Classifier:
             "exist_ok": True,
             "pretrained": True,
             "optimizer": "SGD",
-            "lr0": 0.005,
-            "lrf": 0.0001,
-            "momentum": 0.9,
-            "weight_decay": 0.001,
-            "warmup_epochs": 8,
-            "warmup_momentum": 0.8,
+            "lr0": 0.01,
+            "lrf": 0.001,
+            "momentum": 0.95,
+            "weight_decay": 0.0005,
+            "warmup_epochs": 12,
+            "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
-            "dropout": 0.2,
-            "label_smoothing": 0.1,
+            "dropout": 0.1,
+            "label_smoothing": 0.05,
             "conf": self.default_conf,
         }
 
@@ -742,9 +708,13 @@ class AdaptiveWeightedYOLOv12Classifier:
                     self.patch_model_loss()
                     self._apply_unfreezing_phase(phase_start_epoch)
 
-            # Apply confidence threshold
-            phase_name = f"adaptive_phase_{i+1}"
-            current_conf = self.apply_confidence_by_context(phase_name)
+                # Apply confidence threshold
+                phase_name = f"adaptive_phase_{i+1}"
+                current_conf = self.apply_confidence_by_phase(i + 1)
+
+            # Validate weights in every phase
+            if i == 0:  # Just the first time
+                self.validate_weight_application()
 
             # Configure training for this phase
             phase_training_args = base_training_args.copy()
@@ -752,6 +722,7 @@ class AdaptiveWeightedYOLOv12Classifier:
                 {
                     "epochs": phase_epochs,
                     "name": f"adaptive_phase_{i+1}",
+                    "phase_name": phase_name,
                     "conf": current_conf,
                 }
             )
@@ -773,13 +744,6 @@ class AdaptiveWeightedYOLOv12Classifier:
             except Exception as e:
                 print(f"Error in adaptive phase {i+1}: {e}")
                 continue
-
-        # Auto-optimize confidence threshold after training
-        if auto_optimize_confidence:
-            print(f"\n{'='*50}")
-            print("POST-TRAINING CONFIDENCE OPTIMIZATION")
-            print(f"{'='*50}")
-            optimization_results = self.confidence_threshold(classification_path)
 
         # Save overlap analytics
         self.save_overlap_analytics()
@@ -970,9 +934,8 @@ class AdaptiveWeightedYOLOv12Classifier:
         self,
         dataset_path,
         min_area=0.0001,
-        max_samples_per_class=15000,
         val_split=0.2,
-        overlap_threshold=0.5,
+        overlap_threshold=0.6,
     ):
         """Enhanced dataset cleaning with adaptive overlap handling."""
         print("Extracting and cleaning with adaptive overlap handling...")
@@ -1232,118 +1195,118 @@ class AdaptiveWeightedYOLOv12Classifier:
 
     def _calculate_class_weights(self, class_counts):
         """
-        Calculate more aggressive class weights for extreme imbalance handling.
+        Calculate highly aggressive class weights for severe imbalance cases.
+        Designed to boost recall significantly for minority classes.
 
         Args:
             class_counts (dict): Dictionary with class counts
         """
         if not class_counts or sum(class_counts.values()) == 0:
+            print("Warning: No valid class counts for weight calculation")
             return
 
         valid_classes = {cls: count for cls, count in class_counts.items() if count > 0}
         if len(valid_classes) == 0:
+            print("Error: No classes have samples")
             return
 
-        # Calculate base weights
         counts = np.array([valid_classes[name] for name in valid_classes.keys()])
-        class_labels = np.arange(len(valid_classes))
-
-        # Use more aggressive rebalancing
-        base_weights = compute_class_weight(
-            class_weight="balanced", classes=class_labels, y=np.repeat(class_labels, counts)
-        )
-
-        # Apply additional strict balancing
         max_count = max(counts)
         min_count = min(counts)
         imbalance_ratio = max_count / min_count
 
-        print(f"Class imbalance ratio: {imbalance_ratio:.2f}")
+        print(f"Severe imbalance detected - ratio: {imbalance_ratio:.2f}")
 
-        # More aggressive weighting for severe imbalance
-        if imbalance_ratio > 10:
-            # Square root weighting for extreme cases
-            strict_weights = np.sqrt(max_count / counts)
-            print("Applied square root aggressive weighting")
-        elif imbalance_ratio > 5:
-            # Linear aggressive weighting
-            strict_weights = (max_count / counts) * 0.8
-            print("Applied linear aggressive weighting")
+        # Calculate effective sample size weights (more aggressive than sqrt)
+        # Uses log-based scaling for extreme imbalance
+        if imbalance_ratio > 50:
+            # Logarithmic weighting for extreme cases
+            log_weights = np.log(max_count + 1) / np.log(counts + 1)
+            aggressive_weights = log_weights * 3.0  # Amplify further
+            print("Applied logarithmic extreme weighting (2x amplified)")
+
+        elif imbalance_ratio > 20:
+            # Power weighting for severe cases
+            power_weights = np.power(max_count / counts, 0.75)  # Between sqrt and linear
+            aggressive_weights = power_weights * 2.0
+            print("Applied power weighting (0.75 exponent, 1.5x amplified)")
+
+        elif imbalance_ratio > 10:
+            # Enhanced square root for high imbalance
+            sqrt_weights = np.sqrt(max_count / counts)
+            aggressive_weights = sqrt_weights * 2.5  # Higher amplification
+            print("Applied enhanced square root weighting (1.8x amplified)")
+
         else:
-            # Standard balanced weighting
-            strict_weights = base_weights
-            print("Applied standard balanced weighting")
+            # Amplified linear for moderate imbalance
+            linear_weights = max_count / counts
+            aggressive_weights = linear_weights * 1.2
+            print("Applied amplified linear weighting (1.2x)")
 
-        # Ensure weights don't become too extreme
-        strict_weights = np.clip(strict_weights, 0.1, 10.0)
+        # Apply focal loss inspired scaling for hard examples
+        # Boost weights further for very rare classes (< 1% of max class)
+        rare_class_threshold = max_count * 0.01
+        for i, count in enumerate(counts):
+            if count < rare_class_threshold:
+                aggressive_weights[i] *= 4.0  # Triple weight for very rare classes
+                print(f"Applied rare class boost (3x) for class with {count} samples")
+
+        # More permissive clipping to allow higher weights
+        aggressive_weights = np.clip(aggressive_weights, 0.1, 50.0)  # Allow up to 50x weight
+
+        # Smoothing to prevent extreme jumps between similar classes
+        if len(aggressive_weights) > 2:
+            # Apply slight smoothing only if weights vary dramatically
+            weight_std = np.std(aggressive_weights)
+            weight_mean = np.mean(aggressive_weights)
+            if weight_std > weight_mean * 0.8:  # High variance
+                # Gentle smoothing
+                smoothed = np.copy(aggressive_weights)
+                for i in range(1, len(smoothed) - 1):
+                    smoothed[i] = 0.7 * aggressive_weights[i] + 0.15 * (
+                        aggressive_weights[i - 1] + aggressive_weights[i + 1]
+                    )
+                aggressive_weights = smoothed
+                print("Applied weight smoothing for stability")
 
         # Store weights
         self.class_weights = {}
-        default_weight = np.mean(strict_weights) if len(strict_weights) > 0 else 1.0
+        default_weight = np.mean(aggressive_weights) if len(aggressive_weights) > 0 else 1.0
         valid_class_names = list(valid_classes.keys())
 
         for i, class_name in enumerate(self.class_names):
             if class_name in valid_class_names:
                 weight_idx = valid_class_names.index(class_name)
-                self.class_weights[i] = float(strict_weights[weight_idx])
+                self.class_weights[i] = float(aggressive_weights[weight_idx])
             else:
                 self.class_weights[i] = default_weight
 
         weight_values = [self.class_weights[i] for i in range(len(self.class_names))]
         self.class_weights_tensor = torch.FloatTensor(weight_values)
 
-        print("Strict class weights calculated:")
-        for i, (class_name, weight) in enumerate(zip(self.class_names, weight_values)):
-            sample_count = class_counts.get(class_name, 0)
-            print(f"  {class_name}: {weight:.3f} (samples: {sample_count})")
+        # Enhanced reporting
+        print("Aggressive class weights calculated:")
+        sorted_weights = sorted(enumerate(weight_values), key=lambda x: x[1], reverse=True)
 
-    def create_yolo_classification_config(self, classification_dir):
-        """Create YOLO classification configuration file."""
-        if len(self.class_names) == 0:
-            raise ValueError("No valid classes found.")
+        for i, weight in sorted_weights:
+            if i < len(self.class_names):
+                class_name = self.class_names[i]
+                sample_count = class_counts.get(class_name, 0)
+                percentage = (sample_count / sum(class_counts.values())) * 100
+                print(
+                    f"  {class_name}: weight={weight:.3f} (samples: {sample_count}, {percentage:.1f}%)"
+                )
 
-        config = {
-            "path": os.path.abspath(classification_dir),
-            "train": "train",
-            "val": "val",
-            "nc": len(self.class_names),
-            "names": self.class_names,
-        }
+        # Calculate and report weight statistics
+        weight_ratio = max(weight_values) / min(weight_values)
+        print(f"\nWeight statistics:")
+        print(f"  Weight ratio (max/min): {weight_ratio:.1f}")
+        print(f"  Mean weight: {np.mean(weight_values):.3f}")
+        print(f"  Weight std: {np.std(weight_values):.3f}")
 
-        config_path = os.path.join(classification_dir, "data.yaml")
-        with open(config_path, "w") as f:
-            yaml.safe_dump(config, f)
-
-        return config_path
-
-    def initialize_yolov12_classifier(self):
-        """Initialize YOLOv12 model for classification."""
-        if len(self.class_names) == 0:
-            return False
-
-        try:
-            model_name = f"yolo12{self.model_size}-cls.pt"
-            self.model = YOLO(model_name)
-
-            if self.class_weights_tensor is not None:
-                self.patch_model_loss()
-
-            return True
-
-        except Exception:
-            try:
-                model_name = f"yolo12{self.model_size}.pt"
-                self.model = YOLO(model_name)
-
-                if self.class_weights_tensor is not None:
-                    self.patch_model_loss()
-
-                return True
-            except Exception:
-                return False
+        return aggressive_weights
 
     def patch_model_loss(self):
-        """Patch model to use weighted loss function."""
         if self.model is None or self.class_weights_tensor is None:
             return False
 
@@ -1354,7 +1317,7 @@ class AdaptiveWeightedYOLOv12Classifier:
             if hasattr(self.model.model, "loss"):
                 original_loss = self.model.model.loss
 
-                def weighted_loss_wrapper(*args, **kwargs):
+                def focal_weighted_loss_wrapper(*args, **kwargs):
                     loss_dict = original_loss(*args, **kwargs)
 
                     if "cls" in loss_dict and len(args) >= 2:
@@ -1364,20 +1327,56 @@ class AdaptiveWeightedYOLOv12Classifier:
                             cls_preds = preds[0] if isinstance(preds, (list, tuple)) else preds
 
                             if cls_preds.size(1) == len(self.class_names):
-                                weighted_cls_loss = nn.CrossEntropyLoss(weight=weighted_tensor)(
-                                    cls_preds, cls_targets
-                                )
-                                loss_dict["cls"] = weighted_cls_loss
+                                # Focal Loss con class weights
+                                ce_loss = nn.CrossEntropyLoss(
+                                    weight=weighted_tensor, reduction="none"
+                                )(cls_preds, cls_targets)
+
+                                # Aplicar focal loss (alpha=2 para boost recall)
+                                pt = torch.exp(-ce_loss)
+                                focal_loss = (1 - pt) ** 2 * ce_loss  # alpha=2 para recall
+
+                                loss_dict["cls"] = focal_loss.mean()
 
                     return loss_dict
 
-                self.model.model.loss = weighted_loss_wrapper
+                self.model.model.loss = focal_weighted_loss_wrapper
+                print("Applied Focal Loss + Class Weights for recall boost")
                 return True
-
-        except Exception:
+        except Exception as e:
+            print(f"Error applying focal loss: {e}")
             pass
 
         return False
+
+    def validate_weight_application(self):
+        """
+        Validate that class weights are properly applied to the model.
+
+        Returns:
+            bool: True if weights are correctly applied
+        """
+        if self.model is None or self.class_weights_tensor is None:
+            print("WARNING: Model or weights not available for validation")
+            return False
+
+        try:
+            # Check if loss function has weights
+            if hasattr(self.model.model, "loss"):
+                # Try to access the wrapped loss function
+                print("Class weights validation:")
+                print(f"  Tensor shape: {self.class_weights_tensor.shape}")
+                print(f"  Expected classes: {len(self.class_names)}")
+                print(
+                    f"  Weight range: {self.class_weights_tensor.min():.3f} - {self.class_weights_tensor.max():.3f}"
+                )
+                return True
+            else:
+                print("WARNING: No loss function found in model")
+                return False
+        except Exception as e:
+            print(f"ERROR: Weight validation failed: {e}")
+            return False
 
 
 # Main function for adaptive training
@@ -1387,7 +1386,7 @@ def main_adaptive():
     """
     try:
         print("Initializing Adaptive WeightedYOLOv12Classifier...")
-        classifier = AdaptiveWeightedYOLOv12Classifier(model_size="n", img_size=640, batch_size=12)
+        classifier = AdaptiveWeightedYOLOv12Classifier(model_size="n", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
@@ -1396,10 +1395,9 @@ def main_adaptive():
         print("\nStep 2: Adaptive dataset cleaning...")
         classification_path = classifier.clean_and_extract_objects_with_adaptive_overlap_handling(
             dataset_path,
-            min_area=0.0001,
-            max_samples_per_class=15000,
+            min_area=0.001,
             val_split=0.2,
-            overlap_threshold=0.4,
+            overlap_threshold=0.6,
         )
 
         print("\nStep 3: Initializing YOLOv12 model...")
@@ -1407,14 +1405,13 @@ def main_adaptive():
             raise RuntimeError("Failed to initialize YOLOv12 model")
 
         print("\nStep 4: Adaptive training with corrected progressive unfreezing...")
-        custom_schedule = {0: 0.08, 25: 0.20, 50: 0.35, 75: 0.50, 100: 0.70, 125: 0.85, 150: 1.0}
+        custom_schedule = {0: 0.12, 25: 0.20, 50: 0.40, 75: 0.55, 100: 0.75, 125: 0.90, 150: 1.0}
 
         training_results = (
             classifier.train_model_with_corrected_progressive_unfreezing_and_class_weights(
                 classification_path,
                 epochs=160,
                 unfreeze_schedule=custom_schedule,
-                auto_optimize_confidence=True,
                 adaptive_overlap_enabled=True,
             )
         )

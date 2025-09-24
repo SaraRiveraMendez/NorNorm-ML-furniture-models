@@ -1,9 +1,10 @@
-from roboflow import Roboflow
 import os
 
-TOKEN = os.getenv("ROBOFLOW_API_KEY")
+from roboflow import Roboflow
+
+TOKEN = os.getenv("48MGvsQcK2gpWRbHeOnn")
 VERSION = 5
-MODEL_NAME = "furni-set-detect3"
+MODEL_NAME = "best.pt"
 
 
 def ge():
@@ -16,9 +17,9 @@ def de():
 
 if __name__ == "__main__":
     rf = Roboflow(api_key=TOKEN)
-    project = rf.workspace().project("full-set-menu")
+    project = rf.workspace().project("best.pt")
 
-    model_path = f"../models/{MODEL_NAME}"
-    project.version(VERSION).deploy(model_type="yolov8", model_path=model_path)
+    model_path = f"../../../weights/{MODEL_NAME}"
+    project.version(VERSION).deploy(model_type="yolov12", model_path=model_path)
 
     print("Done!")
