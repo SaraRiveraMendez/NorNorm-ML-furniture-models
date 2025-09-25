@@ -363,13 +363,16 @@ class AdaptiveWeightedYOLOv12Classifier:
 
         if unfreeze_schedule is None:
             unfreeze_schedule = {
-                0: 0.12,
-                25: 0.20,
-                50: 0.40,
-                75: 0.55,
-                100: 0.75,
-                125: 0.90,
-                150: 1.0,
+                0: 0.12,  # Épocas 0-29: 12% inicial (classifier + head principales)
+                30: 0.22,  # Épocas 30-49: 22% (añadir más head layers)
+                50: 0.32,  # Épocas 50-69: 32% (comenzar neck layers)
+                70: 0.42,  # Épocas 70-89: 42% (más neck + backbone tardío)
+                90: 0.52,  # Épocas 90-109: 52% (backbone tardío completo)
+                110: 0.62,  # Épocas 110-129: 62% (backbone medio)
+                130: 0.72,  # Épocas 130-149: 72% (más backbone medio)
+                150: 0.82,  # Épocas 150-169: 82% (backbone temprano)
+                170: 0.92,  # Épocas 170-189: 92% (casi todas las capas)
+                190: 1.0,  # Épocas 190-210: 100% (fine-tuning final completo)
             }
 
         print("Setting up corrected progressive unfreezing...")
@@ -573,21 +576,20 @@ class AdaptiveWeightedYOLOv12Classifier:
         Returns:
             float: Applied confidence threshold
         """
-        if phase_number <= 2:
-            # Early phases: more permissive for learning
-            conf = self.confidence_thresholds["training"]
-            phase_type = "training"
-        elif phase_number <= 4:
-            # Mid phases: moderate filtering
-            conf = self.confidence_thresholds["validation"]
-            phase_type = "validation"
-        elif phase_number <= 6:
-            # Late phases: stricter filtering
-            conf = self.confidence_thresholds["inference"]
+        # Mapeo directo de fase a configuración
+        phase_configs = {
+            1: ("training", self.confidence_thresholds["training"]),
+            2: ("training", self.confidence_thresholds["training"]),
+            3: ("validation", self.confidence_thresholds["validation"]),
+            4: ("validation", self.confidence_thresholds["validation"]),
+            5: ("inference", self.confidence_thresholds["inference"]),
+            6: ("inference", self.confidence_thresholds["inference"]),
+        }
+
+        if phase_number in phase_configs:
+            phase_type, conf = phase_configs[phase_number]
         else:
-            # Final phases: strictest filtering
-            conf = self.confidence_thresholds["strict"]
-            phase_type = "strict"
+            phase_type, conf = "strict", self.confidence_thresholds["strict"]
 
         self.default_conf = conf
         print(f"Phase {phase_number}: Applied {phase_type} confidence = {conf}")
@@ -1483,7 +1485,18 @@ def main_adaptive():
             raise RuntimeError("Failed to initialize YOLOv12 model")
 
         print("\nStep 4: Adaptive training with corrected progressive unfreezing...")
-        custom_schedule = {0: 0.12, 25: 0.20, 50: 0.40, 75: 0.55, 100: 0.75, 125: 0.90, 150: 1.0}
+        custom_schedule = {
+            0: 0.12,  # Épocas 0-29: 12% inicial (classifier + head principales)
+            30: 0.22,  # Épocas 30-49: 22% (añadir más head layers)
+            50: 0.32,  # Épocas 50-69: 32% (comenzar neck layers)
+            70: 0.42,  # Épocas 70-89: 42% (más neck + backbone tardío)
+            90: 0.52,  # Épocas 90-109: 52% (backbone tardío completo)
+            110: 0.62,  # Épocas 110-129: 62% (backbone medio)
+            130: 0.72,  # Épocas 130-149: 72% (más backbone medio)
+            150: 0.82,  # Épocas 150-169: 82% (backbone temprano)
+            170: 0.92,  # Épocas 170-189: 92% (casi todas las capas)
+            190: 1.0,  # Épocas 190-210: 100% (fine-tuning final completo)
+        }
 
         training_results = (
             classifier.train_model_with_corrected_progressive_unfreezing_and_class_weights(
