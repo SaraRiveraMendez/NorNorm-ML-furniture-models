@@ -882,6 +882,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "warmup_bias_lr": 0.1,
             "cos_lr": False,
             "verbose": True,
+            "dropout": 0.1,
             "conf": self.default_conf,
             "iou": 0.7,  # Detection-specific
             "max_det": 300,  # Maximum detections per image
