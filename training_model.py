@@ -872,15 +872,15 @@ class AdaptiveYOLOv12DetectionTrainer:
             "project": self.save_dir,
             "exist_ok": True,
             "pretrained": True,
-            "optimizer": "SDG",
-            "lr0": self.get_lr_by_phase,
+            "optimizer": "SGD",
+            "lr0": 0.01,
             "lrf": 0.001,
             "momentum": 0.95,
             "weight_decay": 0.0005,
             "warmup_epochs": 6,
             "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
-            "cos_lr": True,
+            "cos_lr": False,
             "verbose": True,
             "conf": self.default_conf,
             "iou": 0.7,  # Detection-specific
@@ -927,7 +927,7 @@ class AdaptiveYOLOv12DetectionTrainer:
                     self._apply_detection_unfreezing_phase(phase_start_epoch)
 
             # Apply confidence threshold for current phase
-            current_lr = self.get_lr_by_phase(i + 1)
+            current_lr = self.get_lr_by_phase(i + 1, base_lr=0.01)
 
             # Configure training for this phase
             phase_training_args = base_training_args.copy()
@@ -935,9 +935,12 @@ class AdaptiveYOLOv12DetectionTrainer:
                 {
                     "epochs": phase_epochs,
                     "name": f"detection_phase_{i+1}",
-                    "conf": current_lr,
+                    "conf": 0.50,
+                    "lr0": current_lr,
                 }
             )
+
+            print(f"Phase {i+1}: Learning rate = {current_lr}")
 
             # Execute training
             print(f"Starting detection training phase {i+1}...")
@@ -948,6 +951,7 @@ class AdaptiveYOLOv12DetectionTrainer:
                         "phase": i + 1,
                         "start_epoch": phase_start_epoch,
                         "epochs": phase_epochs,
+                        "lr": current_lr,
                         "results": phase_results,
                     }
                 )
@@ -970,6 +974,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "progressive_unfreezing": True,
             "aggressive_class_weights": True,
             "detection_optimized": True,
+            "progressive_lr": True,
             "class_weights": self.class_weights,
             "final_classes": self.class_names,
             "final_confidence": self.default_conf,
@@ -1106,7 +1111,6 @@ def main_detection_training():
         print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 60)
         print("Features implemented:")
-        print("  ✓ Pure YOLO detection (no classification confusion)")
         print("  ✓ Aggressive class weighting for imbalanced datasets")
         print("  ✓ Detection-optimized progressive unfreezing")
         print("  ✓ Proper YOLO architecture understanding")
