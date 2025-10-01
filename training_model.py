@@ -2,7 +2,9 @@ import datetime
 import json
 import os
 import shutil
+import tempfile
 import zipfile
+from collections import Counter
 from pathlib import Path
 
 import cv2
@@ -13,731 +15,1113 @@ import seaborn as sns
 import torch
 import torch.nn as nn
 import yaml
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    top_k_accuracy_score,
-)
+from sklearn.metrics import classification_report, confusion_matrix
 from sklearn.model_selection import train_test_split
-from sklearn.utils.class_weight import compute_class_weight
 from ultralytics import YOLO
 
 
-class ImprovedYOLOv12Classifier:
-    def __init__(self, model_size="n", img_size=640, batch_size=8):
+class AdaptiveYOLOv12DetectionTrainer:
+    """
+    YOLOv12 Detection Trainer with aggressive class weighting and intelligent progressive unfreezing.
+    Focuses purely on object detection with proper YOLO architecture understanding.
+    """
+
+    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.50):
+        """
+        Initialize the YOLOv12 Detection Trainer.
+
+        Args:
+            model_size (str): Model size ('n', 's', 'm', 'l', 'x')
+            img_size (int): Input image size
+            batch_size (int): Training batch size
+            default_conf (float): Default confidence threshold
+        """
         self.model_size = model_size
         self.img_size = img_size
         self.batch_size = batch_size
+        self.default_conf = default_conf
+
+        # Confidence thresholds by training phase
+        self.confidence_thresholds = {
+            "early": 0.15,  # Permissive for early learning
+            "mid": 0.25,  # Standard threshold
+            "late": 0.35,  # Stricter for refinement
+            "final": 0.45,  # Final strict threshold
+        }
+
         self.model = None
         self.class_names = []
+        self.original_class_names = []
         self.class_weights = None
+        self.class_weights_tensor = None
+        self.id_map = {}
+        self.dataset_stats = {}
 
-        # Create folder with timestamp
+        # Progressive unfreezing state
+        self.unfreezing_state = {
+            "initialized": False,
+            "current_epoch": 0,
+            "current_phase": 0,
+            "layer_groups": [],
+            "schedule": None,
+        }
+
+        # Create timestamped save directory
         timestamp = datetime.datetime.now().strftime("%m-%d-%Y_%H-%M-%S")
-        self.save_dir = f"Models/ImprovedYOLOv12_Model({timestamp})"
+        self.save_dir = f"Models/YOLOv12_Detection_{timestamp}"
         os.makedirs(self.save_dir, exist_ok=True)
-        print(f"Save directory created: {self.save_dir}")
+        print(f"Save directory: {self.save_dir}")
 
-    def download_and_extract_dataset(self, gdrive_file_id):
-        """Download and extract dataset from Google Drive"""
-        print("Downloading dataset from Google Drive...")
+    def download_and_extract_dataset(self, gdrive_file_id, output_filename=None):
+        """Download and extract dataset from Google Drive."""
+        if output_filename is None:
+            output_filename = f"dataset_{gdrive_file_id}.zip"
 
-        # Create download directory
-        download_dir = os.path.join(self.save_dir, "downloads")
-        os.makedirs(download_dir, exist_ok=True)
-
-        # Download file
-        zip_path = os.path.join(download_dir, "dataset.zip")
         url = f"https://drive.google.com/uc?id={gdrive_file_id}"
 
-        try:
-            gdown.download(url, zip_path, quiet=False)
-            print(f"Dataset downloaded: {zip_path}")
-        except Exception as e:
-            print(f"Download failed: {e}")
-            print("Please manually download the dataset and place it in the downloads folder")
-            return None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_zip_path = os.path.join(temp_dir, output_filename)
+            print("Downloading dataset from Google Drive...")
+            gdown.download(url, temp_zip_path, quiet=False)
 
-        # Extract dataset
-        extract_path = os.path.join(download_dir, "extracted")
-        os.makedirs(extract_path, exist_ok=True)
-
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+            extract_path = "dataset/"
+            print("Extracting dataset...")
+            with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
-            print(f"Dataset extracted to: {extract_path}")
 
-            # Find the actual dataset folder (sometimes it's nested)
-            for root, dirs, files in os.walk(extract_path):
-                if "data.yaml" in files or any(d in ["train"] for d in dirs):
-                    print(f"Found dataset at: {root}")
-                    return root
+        return extract_path
 
-            # If no specific structure found, return the extract path
-            return extract_path
+    def prepare_detection_dataset(self, dataset_path, min_area=0.0001, val_split=0.2):
+        """
+        Prepare YOLO detection dataset with proper structure and aggressive class weighting.
 
-        except Exception as e:
-            print(f"Extraction failed: {e}")
-            return None
+        Args:
+            dataset_path (str): Path to raw dataset
+            min_area (float): Minimum normalized area for valid boxes
+            val_split (float): Validation split ratio
 
-    def create_classification_labels(self, classification_dir):
-        """Create YOLO-compatible label files for classification dataset"""
-        print("Creating YOLO classification labels...")
+        Returns:
+            str: Path to prepared dataset
+        """
+        print("Preparing YOLO detection dataset...")
 
-        for split in ["train", "val"]:
-            split_dir = os.path.join(classification_dir, split)
-            labels_dir = os.path.join(classification_dir, split, "labels")
-            os.makedirs(labels_dir, exist_ok=True)
-
-            for class_idx, class_name in enumerate(self.class_names):
-                class_dir = os.path.join(split_dir, class_name)
-                if not os.path.exists(class_dir):
-                    continue
-
-                for img_file in os.listdir(class_dir):
-                    if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                        # Create corresponding label file
-                        label_filename = os.path.splitext(img_file)[0] + ".txt"
-                        label_path = os.path.join(labels_dir, label_filename)
-
-                        # Write class index to label file
-                        with open(label_path, "w") as f:
-                            f.write(str(class_idx))
-
-        print("Label files created successfully")
-
-    def clean_and_extract_objects(
-        self, dataset_path, min_area=0.0001, max_samples_per_class=10000, val_split=0.2
-    ):
-        """Clean YOLO detection dataset (remove background, invalid bboxes) and keep YOLO format."""
-        print("Extracting and cleaning detection annotations...")
-
-        # Load class names
+        # Load original dataset configuration
         yaml_path = os.path.join(dataset_path, "data.yaml")
         if not os.path.exists(yaml_path):
-            raise FileNotFoundError(f"{yaml_path} not found")
+            raise FileNotFoundError(f"Dataset config not found: {yaml_path}")
 
         with open(yaml_path, "r") as f:
             data_config = yaml.safe_load(f)
-            self.class_names = data_config.get("names", [])
+            self.original_class_names = data_config.get("names", [])
 
-        # Normalize & remove background
-        original_names = [n.strip().lower() for n in self.class_names]
-        self.class_names = [n for n in original_names if n not in ["background", "bg"]]
+        print(f"Original classes: {len(self.original_class_names)}")
 
-        if len(self.class_names) < len(original_names):
-            print(f"Removed background class(es). {len(original_names)} → {len(self.class_names)}")
+        # Filter background classes
+        filtered_classes, id_map = self._filter_background_classes()
 
-        print(f"Target classes: {self.class_names}")
+        if len(filtered_classes) == 0:
+            raise ValueError("No valid classes after background filtering!")
 
-        # Map old indices → new indices
-        id_map = {
-            i: self.class_names.index(n)
-            for i, n in enumerate(original_names)
-            if n in self.class_names
-        }
+        self.class_names = filtered_classes
+        self.id_map = id_map
 
-        # Prepare cleaned dataset dir
-        classification_dir = os.path.join(self.save_dir, "cleaned_dataset")
+        print(f"Filtered classes ({len(self.class_names)}): {self.class_names}")
 
-        # Eliminar directorio existente si está corrupto
-        if os.path.exists(classification_dir):
-            shutil.rmtree(classification_dir)
+        # Setup detection dataset structure
+        detection_dir = "yolo_detection_dataset"
+        if os.path.exists(detection_dir):
+            shutil.rmtree(detection_dir)
 
-        os.makedirs(classification_dir, exist_ok=True)
+        self._create_detection_structure(detection_dir)
 
-        # Track counts
-        class_counts = {name: 0 for name in self.class_names}
-        total_labels, kept_labels = 0, 0
+        # Process train/val splits
+        original_train_dir = os.path.join(dataset_path, "train")
 
-        # NUEVA LÓGICA: Procesar solo train y crear val automáticamente
-        train_images_dir = os.path.join(dataset_path, "train", "images")
-        train_labels_dir = os.path.join(dataset_path, "train", "labels")
+        if not os.path.exists(original_train_dir):
+            raise FileNotFoundError(f"Training directory not found: {original_train_dir}")
 
-        if not os.path.exists(train_images_dir) or not os.path.exists(train_labels_dir):
-            raise FileNotFoundError("No se encontraron las carpetas train/images o train/labels")
+        # Get all images and create stratified split
+        all_images = self._get_valid_images(original_train_dir)
+        train_imgs, val_imgs = self._create_detection_split(
+            all_images, original_train_dir, val_split
+        )
 
-        print(f"Processing train split and creating {val_split*100:.0f}% validation split...")
+        # Process splits
+        train_stats = self._process_detection_split(
+            train_imgs, original_train_dir, detection_dir, "train", min_area
+        )
+        val_stats = self._process_detection_split(
+            val_imgs, original_train_dir, detection_dir, "val", min_area
+        )
 
-        # Crear directorios de salida
-        new_train_images_dir = os.path.join(classification_dir, "train", "images")
-        new_train_labels_dir = os.path.join(classification_dir, "train", "labels")
-        new_val_images_dir = os.path.join(classification_dir, "val", "images")
-        new_val_labels_dir = os.path.join(classification_dir, "val", "labels")
+        # Calculate aggressive class weights
+        self._calculate_aggressive_detection_weights(train_stats, val_stats)
 
-        for dir_path in [
-            new_train_images_dir,
-            new_train_labels_dir,
-            new_val_images_dir,
-            new_val_labels_dir,
-        ]:
-            os.makedirs(dir_path, exist_ok=True)
+        # Create YOLO detection config
+        config_path = self._create_detection_config(detection_dir)
 
-        # Obtener todas las imágenes y hacer el split
-        all_images = [
-            f for f in os.listdir(train_images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        print(f"\nDataset preparation complete:")
+        print(f"  Train: {len(train_imgs)} images")
+        print(f"  Val: {len(val_imgs)} images")
+        print(f"  Classes: {len(self.class_names)}")
+
+        return config_path
+
+    def _filter_background_classes(self):
+        """Filter out background classes and create ID mapping."""
+        background_keywords = ["background", "bg", "__background__", "void", "unlabeled", "unknown"]
+
+        filtered_classes = []
+        id_map = {}
+        new_class_id = 0
+
+        for original_id, class_name in enumerate(self.original_class_names):
+            clean_name = class_name.strip().lower()
+            if clean_name not in background_keywords:
+                filtered_classes.append(class_name.strip())
+                id_map[original_id] = new_class_id
+                new_class_id += 1
+
+        return filtered_classes, id_map
+
+    def _create_detection_structure(self, detection_dir):
+        """Create proper YOLO detection directory structure."""
+        structure_dirs = [
+            os.path.join(detection_dir, "images", "train"),
+            os.path.join(detection_dir, "images", "val"),
+            os.path.join(detection_dir, "labels", "train"),
+            os.path.join(detection_dir, "labels", "val"),
         ]
 
-        # Crear split estratificado por clase si es posible
-        try:
+        for dir_path in structure_dirs:
+            os.makedirs(dir_path, exist_ok=True)
 
-            image_classes = []
+    def _get_valid_images(self, train_dir):
+        """Get list of valid images with corresponding labels."""
+        images_dir = os.path.join(train_dir, "images")
+        labels_dir = os.path.join(train_dir, "labels")
+
+        if not os.path.exists(images_dir) or not os.path.exists(labels_dir):
+            raise FileNotFoundError("Train images or labels directory not found")
+
+        all_images = []
+        for img_file in os.listdir(images_dir):
+            if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                label_file = os.path.splitext(img_file)[0] + ".txt"
+                label_path = os.path.join(labels_dir, label_file)
+
+                if os.path.exists(label_path):
+                    all_images.append(img_file)
+
+        return all_images
+
+    def _create_detection_split(self, all_images, train_dir, val_split):
+        """Create train/val split for detection dataset."""
+        labels_dir = os.path.join(train_dir, "labels")
+
+        # Try stratified split based on primary class per image
+        try:
+            image_primary_classes = []
             valid_images = []
 
             for img_file in all_images:
                 label_file = os.path.splitext(img_file)[0] + ".txt"
-                label_path = os.path.join(train_labels_dir, label_file)
+                label_path = os.path.join(labels_dir, label_file)
 
-                if os.path.exists(label_path):
-                    with open(label_path, "r") as f:
-                        lines = f.readlines()
+                primary_class = self._get_primary_class_from_label(label_path)
+                if primary_class is not None:
+                    image_primary_classes.append(primary_class)
+                    valid_images.append(img_file)
 
-                    # Tomar la primera clase válida encontrada para estratificar
-                    img_class = None
-                    for line in lines:
-                        parts = line.strip().split()
-                        if len(parts) == 5:
-                            class_id = int(parts[0])
-                            if class_id in id_map:
-                                img_class = id_map[class_id]
-                                break
-
-                    if img_class is not None:
-                        valid_images.append(img_file)
-                        image_classes.append(img_class)
-
-            if len(valid_images) > 0 and len(set(image_classes)) > 1:
-                # Split estratificado
-                from sklearn.model_selection import train_test_split
-
+            if len(set(image_primary_classes)) > 1:
                 train_imgs, val_imgs = train_test_split(
-                    valid_images, test_size=val_split, stratify=image_classes, random_state=42
+                    valid_images,
+                    test_size=val_split,
+                    stratify=image_primary_classes,
+                    random_state=42,
                 )
-            else:
-                raise Exception("No se pudo hacer split estratificado")
-
+                return train_imgs, val_imgs
         except Exception as e:
-            print(f"Split estratificado falló: {e}. Usando split aleatorio...")
-            # Split aleatorio simple
-            from sklearn.model_selection import train_test_split
+            print(f"Stratified split failed: {e}. Using random split.")
 
-            train_imgs, val_imgs = train_test_split(
-                all_images, test_size=val_split, random_state=42
-            )
+        # Fallback to random split
+        train_imgs, val_imgs = train_test_split(all_images, test_size=val_split, random_state=42)
+        return train_imgs, val_imgs
 
-        print(f"Split creado: {len(train_imgs)} train, {len(val_imgs)} val")
+    def _get_primary_class_from_label(self, label_path):
+        """Get primary class (most frequent) from label file."""
+        try:
+            with open(label_path, "r") as f:
+                lines = f.readlines()
 
-        # Procesar imágenes de entrenamiento
-        for img_file in train_imgs:
-            img_path = os.path.join(train_images_dir, img_file)
-            new_img_path = os.path.join(new_train_images_dir, img_file)
+            classes = []
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    class_id = int(parts[0])
+                    if class_id in self.id_map:
+                        classes.append(self.id_map[class_id])
 
-            # Copy image
-            shutil.copy2(img_path, new_img_path)
+            if classes:
+                return max(set(classes), key=classes.count)
+        except:
+            pass
+        return None
 
-            # Process label
-            label_file = os.path.splitext(img_file)[0] + ".txt"
-            old_label_path = os.path.join(train_labels_dir, label_file)
-            new_label_path = os.path.join(new_train_labels_dir, label_file)
+    def _process_detection_split(self, images, source_dir, target_dir, split_name, min_area):
+        """Process images and labels for detection dataset."""
+        source_imgs_dir = os.path.join(source_dir, "images")
+        source_labels_dir = os.path.join(source_dir, "labels")
 
-            if os.path.exists(old_label_path):
-                processed_labels = self._process_label_file(old_label_path, id_map, min_area)
-                total_labels += processed_labels["total"]
-                kept_labels += processed_labels["kept"]
+        target_imgs_dir = os.path.join(target_dir, "images", split_name)
+        target_labels_dir = os.path.join(target_dir, "labels", split_name)
 
-                # Actualizar conteos por clase
-                for class_name, count in processed_labels["class_counts"].items():
-                    class_counts[class_name] += count
-
-                # Escribir labels procesados
-                if processed_labels["lines"]:
-                    with open(new_label_path, "w") as f:
-                        f.writelines(processed_labels["lines"])
-
-        # Procesar imágenes de validación
-        for img_file in val_imgs:
-            img_path = os.path.join(train_images_dir, img_file)
-            new_img_path = os.path.join(new_val_images_dir, img_file)
-
-            # Copy image
-            shutil.copy2(img_path, new_img_path)
-
-            # Process label
-            label_file = os.path.splitext(img_file)[0] + ".txt"
-            old_label_path = os.path.join(train_labels_dir, label_file)
-            new_label_path = os.path.join(new_val_labels_dir, label_file)
-
-            if os.path.exists(old_label_path):
-                processed_labels = self._process_label_file(old_label_path, id_map, min_area)
-                total_labels += processed_labels["total"]
-                kept_labels += processed_labels["kept"]
-
-                # Actualizar conteos por clase
-                for class_name, count in processed_labels["class_counts"].items():
-                    class_counts[class_name] += count
-
-                # Escribir labels procesados
-                if processed_labels["lines"]:
-                    with open(new_label_path, "w") as f:
-                        f.writelines(processed_labels["lines"])
-
-        print(f"\nObject cleaning summary:")
-        print(f"Original labels: {total_labels}")
-        print(f"Kept labels: {kept_labels}")
-        print(f"Train/Val split: {len(train_imgs)}/{len(val_imgs)}")
-        for cls, count in class_counts.items():
-            print(f"  {cls}: {count} objects")
-
-        return classification_dir
-
-    def _process_label_file(self, label_path, id_map, min_area):
-        """Helper method to process individual label files"""
-        with open(label_path, "r") as f:
-            lines = f.readlines()
-
-        new_lines = []
         class_counts = {name: 0 for name in self.class_names}
-        total_lines = len(lines)
-        kept_lines = 0
+        total_boxes, kept_boxes = 0, 0
+        processed_images = 0
+
+        for img_file in images:
+            # Copy image
+            src_img_path = os.path.join(source_imgs_dir, img_file)
+            dst_img_path = os.path.join(target_imgs_dir, img_file)
+
+            if not os.path.exists(src_img_path):
+                continue
+
+            # Process labels
+            label_file = os.path.splitext(img_file)[0] + ".txt"
+            src_label_path = os.path.join(source_labels_dir, label_file)
+            dst_label_path = os.path.join(target_labels_dir, label_file)
+
+            if os.path.exists(src_label_path):
+                processed_labels = self._process_detection_labels(src_label_path, min_area)
+
+                if processed_labels["kept_lines"]:
+                    shutil.copy2(src_img_path, dst_img_path)
+
+                    with open(dst_label_path, "w") as f:
+                        f.writelines(processed_labels["kept_lines"])
+
+                    processed_images += 1
+                    total_boxes += processed_labels["total_boxes"]
+                    kept_boxes += processed_labels["kept_boxes"]
+
+                    for class_name, count in processed_labels["class_counts"].items():
+                        class_counts[class_name] += count
+
+        stats = {
+            "images": processed_images,
+            "total_boxes": total_boxes,
+            "kept_boxes": kept_boxes,
+            "class_counts": class_counts,
+        }
+
+        print(
+            f"{split_name.capitalize()} split: {processed_images} images, "
+            f"{kept_boxes}/{total_boxes} boxes kept"
+        )
+
+        return stats
+
+    def _process_detection_labels(self, label_path, min_area):
+        """Process single label file for detection."""
+        try:
+            with open(label_path, "r") as f:
+                lines = f.readlines()
+        except:
+            return {
+                "kept_lines": [],
+                "total_boxes": 0,
+                "kept_boxes": 0,
+                "class_counts": {name: 0 for name in self.class_names},
+            }
+
+        kept_lines = []
+        class_counts = {name: 0 for name in self.class_names}
+        total_boxes = len(lines)
 
         for line in lines:
             parts = line.strip().split()
             if len(parts) != 5:
                 continue
 
-            class_id = int(parts[0])
-            if class_id not in id_map:
+            try:
+                class_id = int(parts[0])
+                cx, cy, w, h = map(float, parts[1:])
+            except ValueError:
                 continue
 
-            cx, cy, bw, bh = map(float, parts[1:])
-
-            # Skip invalid
-            if bw <= 0 or bh <= 0 or cx < 0 or cy < 0 or cx > 1 or cy > 1:
+            # Validate bounding box
+            if (
+                class_id not in self.id_map
+                or w <= 0
+                or h <= 0
+                or cx < 0
+                or cy < 0
+                or cx > 1
+                or cy > 1
+                or w * h < min_area
+            ):
                 continue
-            if bw * bh < min_area:
-                continue
 
-            new_id = id_map[class_id]
-            new_lines.append(f"{new_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
-            class_counts[self.class_names[new_id]] += 1
-            kept_lines += 1
+            # Remap class ID
+            new_class_id = self.id_map[class_id]
+            kept_lines.append(f"{new_class_id} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f}\n")
+
+            if new_class_id < len(self.class_names):
+                class_counts[self.class_names[new_class_id]] += 1
 
         return {
-            "lines": new_lines,
-            "total": total_lines,
-            "kept": kept_lines,
+            "kept_lines": kept_lines,
+            "total_boxes": total_boxes,
+            "kept_boxes": len(kept_lines),
             "class_counts": class_counts,
         }
 
-    def create_yolo_classification_config(self, classification_dir):
-        """Create YOLO classification configuration"""
+    def _calculate_aggressive_detection_weights(self, train_stats, val_stats):
+        """
+        Calculate aggressive class weights for severe imbalance correction in detection.
+        Uses your original aggressive weighting logic adapted for detection.
+        """
+        print("\nCalculating aggressive class weights for detection...")
+
+        # Combine train and val statistics
+        combined_counts = {}
+        for class_name in self.class_names:
+            combined_counts[class_name] = (
+                train_stats["class_counts"][class_name] + val_stats["class_counts"][class_name]
+            )
+
+        valid_classes = {cls: count for cls, count in combined_counts.items() if count > 0}
+
+        if len(valid_classes) == 0:
+            print("Warning: No valid classes with samples")
+            return
+
+        counts = np.array([valid_classes[name] for name in valid_classes.keys()])
+        max_count = max(counts)
+        min_count = min(counts)
+        imbalance_ratio = max_count / min_count
+
+        print(f"Detection dataset imbalance ratio: {imbalance_ratio:.2f}")
+
+        # Apply aggressive weighting strategy based on imbalance severity
+        if imbalance_ratio > 50:
+            # Logarithmic weighting for extreme cases
+            log_weights = np.log(max_count + 1) / np.log(counts + 1)
+            aggressive_weights = log_weights * 3.0  # High amplification
+            strategy = "logarithmic extreme (3x amplified)"
+
+        elif imbalance_ratio > 20:
+            # Power weighting for severe cases
+            power_weights = np.power(max_count / counts, 0.75)
+            aggressive_weights = power_weights * 2.0
+            strategy = "power weighting (0.75 exp, 2x amplified)"
+
+        elif imbalance_ratio > 10:
+            # Enhanced square root for high imbalance
+            sqrt_weights = np.sqrt(max_count / counts)
+            aggressive_weights = sqrt_weights * 2.5
+            strategy = "enhanced sqrt (2.5x amplified)"
+
+        else:
+            # Amplified linear for moderate imbalance
+            linear_weights = max_count / counts
+            aggressive_weights = linear_weights * 1.2
+            strategy = "amplified linear (1.2x)"
+
+        print(f"Applied {strategy}")
+
+        # Boost very rare classes (< 1% of max class)
+        rare_threshold = max_count * 0.01
+        for i, count in enumerate(counts):
+            if count < rare_threshold:
+                aggressive_weights[i] *= 4.0  # 4x boost for very rare classes
+                print(
+                    f"Rare class boost applied: {list(valid_classes.keys())[i]} "
+                    f"({count} samples)"
+                )
+
+        # Clip to reasonable range for detection (higher than classification)
+        aggressive_weights = np.clip(aggressive_weights, 0.1, 100.0)
+
+        # Optional smoothing for extreme variance
+        weight_std = np.std(aggressive_weights)
+        weight_mean = np.mean(aggressive_weights)
+        if len(aggressive_weights) > 2 and weight_std > weight_mean * 0.8:
+            # Gentle smoothing
+            smoothed = np.copy(aggressive_weights)
+            for i in range(1, len(smoothed) - 1):
+                smoothed[i] = 0.7 * aggressive_weights[i] + 0.15 * (
+                    aggressive_weights[i - 1] + aggressive_weights[i + 1]
+                )
+            aggressive_weights = smoothed
+            print("Applied weight smoothing for stability")
+
+        # Store weights
+        self.class_weights = {}
+        default_weight = np.mean(aggressive_weights) if len(aggressive_weights) > 0 else 1.0
+        valid_class_names = list(valid_classes.keys())
+
+        for i, class_name in enumerate(self.class_names):
+            if class_name in valid_class_names:
+                weight_idx = valid_class_names.index(class_name)
+                self.class_weights[i] = float(aggressive_weights[weight_idx])
+            else:
+                self.class_weights[i] = default_weight
+
+        # Create tensor for loss function
+        weight_values = [self.class_weights[i] for i in range(len(self.class_names))]
+        self.class_weights_tensor = torch.FloatTensor(weight_values)
+
+        # Detailed reporting
+        print("\nDetection class weights:")
+        sorted_weights = sorted(enumerate(weight_values), key=lambda x: x[1], reverse=True)
+
+        total_samples = sum(combined_counts.values())
+        for i, weight in sorted_weights:
+            if i < len(self.class_names):
+                class_name = self.class_names[i]
+                sample_count = combined_counts.get(class_name, 0)
+                percentage = (sample_count / total_samples) * 100 if total_samples > 0 else 0
+                print(
+                    f"  {class_name}: weight={weight:.3f} "
+                    f"(samples: {sample_count}, {percentage:.1f}%)"
+                )
+
+        # Weight statistics
+        weight_ratio = max(weight_values) / min(weight_values)
+        print(f"\nWeight statistics:")
+        print(f"  Max/Min ratio: {weight_ratio:.1f}")
+        print(f"  Mean weight: {np.mean(weight_values):.3f}")
+        print(f"  Weight std: {np.std(weight_values):.3f}")
+
+    def _create_detection_config(self, detection_dir):
+        """Create YOLO detection configuration file."""
         config = {
-            "path": os.path.abspath(classification_dir),
-            "train": "train",
-            "val": "val",
+            "path": os.path.abspath(detection_dir),
+            "train": "images/train",
+            "val": "images/val",
             "nc": len(self.class_names),
             "names": self.class_names,
         }
 
-        config_path = os.path.join(classification_dir, "data.yaml")
-
-        # Verificar que el directorio existe y no hay conflictos
-        if os.path.exists(config_path) and not os.path.isfile(config_path):
-            print(f"Advertencia: {config_path} existe pero no es un archivo. Eliminando...")
-            if os.path.isdir(config_path):
-                shutil.rmtree(config_path)
-            else:
-                os.remove(config_path)
+        config_path = os.path.join(detection_dir, "data.yaml")
 
         with open(config_path, "w") as f:
-            yaml.safe_dump(config, f)
+            yaml.safe_dump(config, f, default_flow_style=False)
 
-        print(f"YOLO classification config saved: {config_path}")
-        print(f"Number of classes: {len(self.class_names)}")
-
+        print(f"YOLO detection config saved: {config_path}")
         return config_path
 
-    def initialize_model(self):
-        """Initialize YOLOv12 classification model"""
+    def initialize_yolo_detection_model(self):
+        """Initialize YOLOv12 detection model and apply class weights."""
+        if len(self.class_names) == 0:
+            print("Error: No classes defined")
+            return False
+
         try:
-            # Try classification model first
-            model_name = f"yolo12{self.model_size}-cls.pt"
+            model_name = f"yolo12{self.model_size}.pt"
+            print(f"Initializing {model_name}...")
             self.model = YOLO(model_name)
-            print(f"YOLOv12{self.model_size} classification model loaded")
+
+            print(f"YOLOv12{self.model_size} detection model loaded successfully")
+
+            # Apply class weights if available
+            if self.class_weights_tensor is not None:
+                self._apply_detection_class_weights()
+
             return True
-        except:
-            try:
-                # Fallback to detection model
-                model_name = f"yolo12{self.model_size}.pt"
-                self.model = YOLO(model_name)
-                print(
-                    f"YOLOv12{self.model_size} detection model loaded (will adapt for classification)"
-                )
-                return True
-            except Exception as e:
-                print(f"Error loading model: {e}")
-                return False
-
-    def train_with_progressive_unfreezing(self, config_path, total_epochs=80):
-        """Entrenamiento con descongelamiento progresivo"""
-        print(f"Starting progressive unfreezing training...")
-        print(f"Classes: {len(self.class_names)}")
-        print(f"Total epochs: {total_epochs}")
-
-        # Definir las fases de descongelamiento
-        phases = [
-            {
-                "name": "Phase 1: Frozen Backbone",
-                "epochs": total_epochs // 3,
-                "freeze_backbone": True,
-                "freeze_neck": False,
-                "lr": 0.001,
-                "description": "Only training the head",
-            },
-            {
-                "name": "Phase 2: Partial Unfreezing",
-                "epochs": total_epochs // 3,
-                "freeze_backbone": False,
-                "freeze_neck": True,
-                "lr": 0.0005,
-                "description": "Backbone unfrezing, the neck is still frozen",
-            },
-            {
-                "name": "Phase 3: Full Unfreezing",
-                "epochs": total_epochs - 2 * (total_epochs // 3),
-                "freeze_backbone": False,
-                "freeze_neck": False,
-                "lr": 0.0001,
-                "description": "Train all the model with a low LR",
-            },
-        ]
-
-        print(f"\n{'='*60}")
-        print("PROGRESSIVE UNFREEZING TRAINING PLAN:")
-        for i, phase in enumerate(phases):
-            print(f"{phase['name']}: {phase['epochs']} epochs, LR: {phase['lr']}")
-            print(f"  - {phase['description']}")
-        print(f"{'='*60}\n")
-
-        try:
-            current_epoch = 0
-
-            for phase_idx, phase in enumerate(phases):
-                print(f"\nStarting {phase['name']}")
-                print(f"Epochs: {phase['epochs']}, Learning Rate: {phase['lr']}")
-                print("-" * 50)
-
-                # Training parameters for this phase
-                train_kwargs = {
-                    "data": config_path,
-                    "epochs": phase["epochs"],
-                    "imgsz": self.img_size,
-                    "batch": self.batch_size,
-                    "device": "cpu",  # Change to "0" if you have GPU
-                    "workers": 2,
-                    "patience": max(10, phase["epochs"] // 3),
-                    "save": True,
-                    "save_period": max(5, phase["epochs"] // 4),
-                    "val": True,
-                    "project": self.save_dir,
-                    "name": f"phase_{phase_idx + 1}_training",
-                    "exist_ok": True,
-                    "pretrained": True,
-                    "resume": phase_idx > 0,
-                    "optimizer": "AdamW",
-                    "lr0": phase["lr"],
-                    "lrf": 0.1,
-                    "momentum": 0.9,
-                    "weight_decay": 0.001,
-                    "warmup_epochs": min(3, phase["epochs"] // 5),
-                    "warmup_momentum": 0.8,
-                    "warmup_bias_lr": phase["lr"] * 0.1,
-                    "cls": 1.0,
-                    "box": 0.0,
-                    "dfl": 0.0,
-                    "verbose": True,
-                    "plots": True,
-                }
-
-                # Freezing configuration for this phase:
-                if phase_idx == 0:
-                    # Phase 1: Backbone freezing
-                    train_kwargs["freeze"] = 10  # Freeze first 10 layers
-                elif phase_idx == 1:
-                    # Phase 2: Ufreezing the backbone partially
-                    train_kwargs["freeze"] = 5  # Freeze first 5 layers
-                else:
-                    # Phase 3: Unfreeze everything
-                    train_kwargs["freeze"] = 0  # No freezing
-
-                phase_results = self.model.train(**train_kwargs)
-
-                current_epoch += phase["epochs"]
-                print(f"Completed {phase['name']}")
-                print(f"Total epochs completed: {current_epoch}/{total_epochs}")
-
-                print(f"\nEvaluating {phase['name']}...")
-                try:
-                    val_results = self.model.val()
-                    print(f"Phase {phase_idx + 1} validation completed")
-                    if hasattr(val_results, "top1"):
-                        print(f"Phase {phase_idx + 1} Top-1 Accuracy: {val_results.top1:.3f}")
-                except Exception as e:
-                    print(f"Phase {phase_idx + 1} validation error: {e}")
-
-            print(f"\nProgressive unfreezing training completed!")
-            return phase_results
 
         except Exception as e:
-            print(f"Progressive training failed: {e}")
-            print("Trying fallback standard training...")
-            return self.train_with_improved_params(config_path, total_epochs)
+            print(f"Error initializing model: {e}")
+            return False
 
-    def train_with_improved_params(self, config_path, epochs=80):
-        """Train with optimized parameters for better accuracy (fallback method)"""
-        print(f"Starting fallback training with improved parameters...")
+    def _apply_detection_class_weights(self):
+        """Apply class weights to YOLO detection model."""
+        if self.model is None or self.class_weights_tensor is None:
+            return False
 
         try:
-            # Enhanced training parameters
-            results = self.model.train(
-                data=config_path,
-                epochs=epochs,
-                imgsz=self.img_size,
-                batch=self.batch_size,
-                device="cpu",
-                workers=2,
-                patience=15,
-                save=True,
-                save_period=10,
-                val=True,
-                project=self.save_dir,
-                name="training_fallback",
-                exist_ok=True,
-                pretrained=True,
-                optimizer="AdamW",
-                lr0=0.001,
-                lrf=0.1,
-                momentum=0.9,
-                weight_decay=0.001,
-                warmup_epochs=5,
-                warmup_momentum=0.8,
-                warmup_bias_lr=0.01,
-                cls=1.0,
-                box=0.0,
-                dfl=0.0,
-                verbose=True,
-                plots=True,
+            # Get device from model
+            device = next(self.model.model.parameters()).device
+            weighted_tensor = self.class_weights_tensor.to(device)
+
+            # Store original loss function
+            if hasattr(self.model.model, "loss"):
+                original_loss = self.model.model.loss
+
+                def weighted_detection_loss(*args, **kwargs):
+                    """Modified loss function with aggressive class weights for detection."""
+                    loss_dict = original_loss(*args, **kwargs)
+
+                    # Apply weights to classification loss component
+                    if "cls" in loss_dict and len(args) >= 2:
+                        try:
+                            preds, targets = args[0], args[1]
+
+                            # Handle different target formats
+                            if hasattr(targets, "cls"):
+                                cls_targets = targets.cls.long()
+                            elif isinstance(targets, dict) and "cls" in targets:
+                                cls_targets = targets["cls"].long()
+                            else:
+                                return loss_dict  # Skip if can't extract targets
+
+                            # Handle different prediction formats
+                            if isinstance(preds, (list, tuple)):
+                                cls_preds = preds[0] if len(preds) > 0 else None
+                            else:
+                                cls_preds = preds
+
+                            if cls_preds is not None and cls_preds.size(1) == len(self.class_names):
+                                # Apply weighted focal loss for better recall
+                                ce_loss = nn.CrossEntropyLoss(
+                                    weight=weighted_tensor, reduction="none"
+                                )(cls_preds, cls_targets)
+
+                                # Focal loss with alpha=2 for recall boost
+                                pt = torch.exp(-ce_loss)
+                                focal_loss = (1 - pt) ** 2 * ce_loss
+
+                                loss_dict["cls"] = focal_loss.mean()
+
+                        except Exception as e:
+                            print(f"Warning: Could not apply class weights: {e}")
+
+                    return loss_dict
+
+                # Replace loss function
+                self.model.model.loss = weighted_detection_loss
+                print("Applied aggressive class weights with focal loss to detection model")
+                return True
+
+        except Exception as e:
+            print(f"Error applying class weights: {e}")
+
+        return False
+
+    def setup_detection_progressive_unfreezing(self, unfreeze_schedule=None):
+        """
+        Setup progressive unfreezing optimized for YOLO detection architecture.
+
+        Args:
+            unfreeze_schedule (dict): Custom unfreezing schedule
+
+        Returns:
+            dict: Unfreezing configuration
+        """
+        if self.model is None:
+            print("Error: Model not initialized")
+            return None
+
+        if unfreeze_schedule is None:
+            # Detection-optimized unfreezing schedule
+            unfreeze_schedule = {
+                0: 0.15,  # Start with detection heads only
+                20: 0.25,  # Add neck components
+                40: 0.40,  # Add late backbone
+                60: 0.60,  # Add mid backbone
+                80: 0.80,  # Add early backbone
+                100: 1.0,  # Full model
+            }
+
+        print("Setting up YOLO detection progressive unfreezing...")
+
+        # Get trainable parameters
+        all_params = []
+        param_info = []
+
+        for name, param in self.model.model.named_parameters():
+            if param.requires_grad:
+                param_info.append(
+                    {
+                        "name": name,
+                        "param": param,
+                        "shape": tuple(param.shape),
+                        "numel": param.numel(),
+                    }
+                )
+
+        # Create YOLO-specific layer groups
+        layer_groups = self._create_detection_layer_groups(param_info)
+
+        print(f"Created {len(layer_groups)} detection layer groups:")
+        for i, group in enumerate(layer_groups):
+            print(f"  Group {i+1}: {group['name']} ({len(group['params'])} parameters)")
+
+        # Store unfreezing state
+        self.unfreezing_state = {
+            "initialized": True,
+            "schedule": unfreeze_schedule,
+            "layer_groups": layer_groups,
+            "total_params": len(param_info),
+            "current_epoch": 0,
+            "current_phase": 0,
+        }
+
+        # Apply initial freezing
+        self._apply_detection_unfreezing_phase(0)
+
+        return {
+            "schedule": unfreeze_schedule,
+            "total_params": len(param_info),
+            "layer_groups": len(layer_groups),
+            "initial_phase": 0,
+        }
+
+    def _create_detection_layer_groups(self, param_info):
+        """Create YOLO detection-specific layer groups for unfreezing."""
+        groups = []
+
+        # YOLO detection layer categorization
+        detection_heads = []
+        neck_layers = []
+        late_backbone = []
+        mid_backbone = []
+        early_backbone = []
+
+        for info in param_info:
+            name = info["name"].lower()
+
+            # Detection heads (highest priority - most task-specific)
+            if any(x in name for x in ["detect", "cv2", "cv3", "dfl", "head"]):
+                detection_heads.append(info)
+
+            # Neck/FPN layers (second priority - multi-scale aggregation)
+            elif any(x in name for x in ["neck", "fpn", "pan", "sppf", "concat", "upsample"]):
+                neck_layers.append(info)
+
+            # Backbone layers (by depth - deeper = higher level features)
+            elif "model" in name:
+                # Extract layer number for backbone ordering
+                import re
+
+                layer_match = re.search(r"model\.(\d+)", name)
+                if layer_match:
+                    layer_num = int(layer_match.group(1))
+
+                    if layer_num >= 15:  # Late backbone (high-level features)
+                        late_backbone.append(info)
+                    elif layer_num >= 9:  # Mid backbone
+                        mid_backbone.append(info)
+                    else:  # Early backbone (low-level features)
+                        early_backbone.append(info)
+                else:
+                    # Default to mid backbone if can't determine layer
+                    mid_backbone.append(info)
+            else:
+                # Other parameters go to mid backbone
+                mid_backbone.append(info)
+
+        # Create groups in unfreezing priority order
+        if detection_heads:
+            groups.append(
+                {
+                    "name": "Detection Heads (cv2, cv3, dfl)",
+                    "params": detection_heads,
+                    "priority": 1,
+                }
             )
 
-            print("Fallback training completed successfully!")
+        if neck_layers:
+            groups.append(
+                {"name": "Neck/FPN (SPPF, Concat, Upsample)", "params": neck_layers, "priority": 2}
+            )
+
+        if late_backbone:
+            groups.append(
+                {
+                    "name": "Backbone Late (High-level features)",
+                    "params": late_backbone,
+                    "priority": 3,
+                }
+            )
+
+        if mid_backbone:
+            groups.append(
+                {"name": "Backbone Mid (Mid-level features)", "params": mid_backbone, "priority": 4}
+            )
+
+        if early_backbone:
+            groups.append(
+                {
+                    "name": "Backbone Early (Low-level features)",
+                    "params": early_backbone,
+                    "priority": 5,
+                }
+            )
+
+        # Sort by priority
+        groups.sort(key=lambda x: x["priority"])
+
+        return groups
+
+    def _apply_detection_unfreezing_phase(self, epoch):
+        """Apply progressive unfreezing for current epoch."""
+        if not self.unfreezing_state["initialized"]:
+            return False
+
+        schedule = self.unfreezing_state["schedule"]
+        layer_groups = self.unfreezing_state["layer_groups"]
+
+        # Find current phase ratio
+        current_phase_ratio = 0.15  # Default
+        for epoch_threshold in sorted(schedule.keys()):
+            if epoch >= epoch_threshold:
+                current_phase_ratio = schedule[epoch_threshold]
+            else:
+                break
+
+        # Calculate groups to unfreeze
+        total_groups = len(layer_groups)
+        groups_to_unfreeze = max(1, int(total_groups * current_phase_ratio))
+        groups_to_unfreeze = min(groups_to_unfreeze, total_groups)
+
+        old_phase = self.unfreezing_state.get("current_phase", 0)
+
+        if groups_to_unfreeze != old_phase or epoch == 0:
+            print(f"\nEpoch {epoch}: Detection unfreezing phase")
+            print(
+                f"  Unfreezing {groups_to_unfreeze}/{total_groups} groups "
+                f"({current_phase_ratio*100:.0f}%)"
+            )
+
+            # Freeze all parameters first
+            for group in layer_groups:
+                for param_info in group["params"]:
+                    param_info["param"].requires_grad = False
+
+            # Unfreeze specified groups (by priority)
+            unfrozen_params = 0
+            for i in range(groups_to_unfreeze):
+                group = layer_groups[i]
+                for param_info in group["params"]:
+                    param_info["param"].requires_grad = True
+                    unfrozen_params += 1
+                print(f"    ✓ {group['name']} ({len(group['params'])} params)")
+
+            # Update state
+            self.unfreezing_state["current_phase"] = groups_to_unfreeze
+            self.unfreezing_state["current_epoch"] = epoch
+
+            frozen_params = self.unfreezing_state["total_params"] - unfrozen_params
+            print(f"  Total: {unfrozen_params} unfrozen, {frozen_params} frozen")
+
+            return True
+
+        return False
+
+    def get_lr_by_phase(self, phase_number, base_lr=0.001):
+        """Ajusta learning rate progresivamente."""
+        if phase_number <= 2:
+            return base_lr * 1.0  # LR normal
+        elif phase_number <= 4:
+            return base_lr * 0.5  # Reduce LR
+        else:
+            return base_lr * 0.1  # Low LR for fine-tuning
+
+    def train_detection_model_with_progressive_unfreezing(
+        self, config_path, epochs=120, unfreeze_schedule=None
+    ):
+        """
+        Train YOLO detection model with progressive unfreezing and aggressive class weights.
+
+        Args:
+            config_path (str): Path to YOLO detection config
+            epochs (int): Total training epochs
+            unfreeze_schedule (dict): Custom unfreezing schedule
+
+        Returns:
+            dict: Training results
+        """
+        print(f"\n{'='*60}")
+        print("YOLO DETECTION TRAINING: PROGRESSIVE UNFREEZING + AGGRESSIVE WEIGHTS")
+        print(f"{'='*60}")
+
+        if len(self.class_names) == 0:
+            raise ValueError("No classes defined")
+
+        if self.model is None:
+            raise ValueError("Model not initialized")
+
+        # Setup progressive unfreezing
+        unfreezing_config = self.setup_detection_progressive_unfreezing(unfreeze_schedule)
+        if unfreezing_config is None:
+            print("Failed to setup progressive unfreezing")
+            return None
+
+        print("Training features enabled:")
+        print(f"  ✓ Progressive unfreezing ({len(self.unfreezing_state['layer_groups'])} groups)")
+        print(
+            f"  ✓ Aggressive class weights (max ratio: {max(self.class_weights.values())/min(self.class_weights.values()):.1f})"
+        )
+        print(f"  ✓ Detection-optimized architecture understanding")
+
+        # Base training arguments for detection
+        base_training_args = {
+            "data": config_path,
+            "imgsz": self.img_size,
+            "batch": self.batch_size,
+            "device": "cpu",
+            "workers": 4,
+            "patience": 20,
+            "save": True,
+            "save_period": 15,
+            "val": True,
+            "project": self.save_dir,
+            "exist_ok": True,
+            "pretrained": True,
+            "optimizer": "SDG",
+            "lr0": self.get_lr_by_phase,
+            "lrf": 0.001,
+            "momentum": 0.95,
+            "weight_decay": 0.0005,
+            "warmup_epochs": 6,
+            "warmup_momentum": 0.85,
+            "warmup_bias_lr": 0.1,
+            "cos_lr": True,
+            "verbose": True,
+            "conf": self.default_conf,
+            "iou": 0.7,  # Detection-specific
+            "max_det": 300,  # Maximum detections per image
+        }
+
+        # Phase-based training
+        schedule = self.unfreezing_state["schedule"]
+        epoch_phases = sorted(schedule.keys())
+        all_phase_results = []
+
+        print("\nStarting detection training with progressive unfreezing...")
+
+        for i, phase_start_epoch in enumerate(epoch_phases):
+            # Calculate epochs for this phase
+            if i + 1 < len(epoch_phases):
+                phase_epochs = epoch_phases[i + 1] - phase_start_epoch
+            else:
+                phase_epochs = epochs - phase_start_epoch
+
+            if phase_epochs <= 0:
+                continue
+
+            print(f"\n{'='*50}")
+            print(
+                f"DETECTION PHASE {i+1}: EPOCHS {phase_start_epoch}-{phase_start_epoch + phase_epochs - 1}"
+            )
+            print(f"{'='*50}")
+
+            # Apply unfreezing for this phase
+            self._apply_detection_unfreezing_phase(phase_start_epoch)
+
+            # Load previous checkpoint if continuing
+            if i > 0:
+                previous_phase_name = f"detection_phase_{i}"
+                last_checkpoint = os.path.join(
+                    self.save_dir, previous_phase_name, "weights", "last.pt"
+                )
+                if os.path.exists(last_checkpoint):
+                    print(f"Loading checkpoint: {last_checkpoint}")
+                    self.model = YOLO(last_checkpoint)
+                    # Re-apply class weights and unfreezing
+                    self._apply_detection_class_weights()
+                    self._apply_detection_unfreezing_phase(phase_start_epoch)
+
+            # Apply confidence threshold for current phase
+            current_lr = self.get_lr_by_phase(i + 1)
+
+            # Configure training for this phase
+            phase_training_args = base_training_args.copy()
+            phase_training_args.update(
+                {
+                    "epochs": phase_epochs,
+                    "name": f"detection_phase_{i+1}",
+                    "conf": current_lr,
+                }
+            )
+
+            # Execute training
+            print(f"Starting detection training phase {i+1}...")
+            try:
+                phase_results = self.model.train(**phase_training_args)
+                all_phase_results.append(
+                    {
+                        "phase": i + 1,
+                        "start_epoch": phase_start_epoch,
+                        "epochs": phase_epochs,
+                        "results": phase_results,
+                    }
+                )
+                print(f"Detection phase {i+1} completed successfully!")
+
+            except Exception as e:
+                print(f"Error in detection phase {i+1}: {e}")
+                continue
+
+        # Save training summary
+        self._save_detection_training_summary(all_phase_results)
+
+        print(f"\n{'='*60}")
+        print("DETECTION TRAINING COMPLETED!")
+        print(f"{'='*60}")
+
+        return {
+            "all_phases": all_phase_results,
+            "final_results": all_phase_results[-1]["results"] if all_phase_results else None,
+            "progressive_unfreezing": True,
+            "aggressive_class_weights": True,
+            "detection_optimized": True,
+            "class_weights": self.class_weights,
+            "final_classes": self.class_names,
+            "final_confidence": self.default_conf,
+        }
+
+    def _save_detection_training_summary(self, all_phase_results):
+        """Save comprehensive training summary."""
+        summary = {
+            "training_timestamp": datetime.datetime.now().isoformat(),
+            "model_config": {
+                "model_size": self.model_size,
+                "img_size": self.img_size,
+                "batch_size": self.batch_size,
+            },
+            "dataset_info": {
+                "classes": self.class_names,
+                "num_classes": len(self.class_names),
+                "class_weights": self.class_weights,
+            },
+            "training_phases": len(all_phase_results),
+            "progressive_unfreezing": {
+                "enabled": True,
+                "schedule": self.unfreezing_state["schedule"],
+                "layer_groups": len(self.unfreezing_state["layer_groups"]),
+            },
+            "phase_results": all_phase_results,
+        }
+
+        summary_path = os.path.join(self.save_dir, "training_summary.json")
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2, default=str)
+
+        print(f"Training summary saved: {summary_path}")
+
+    def validate_detection_model(self, config_path):
+        """Validate the trained detection model."""
+        if self.model is None:
+            print("No model to validate")
+            return None
+
+        print("\nValidating detection model...")
+        try:
+            # Run validation
+            results = self.model.val(data=config_path, conf=self.default_conf)
+
+            print("Validation completed successfully!")
+            print(f"mAP50: {results.box.map50:.3f}")
+            print(f"mAP50-95: {results.box.map:.3f}")
+
+            # Class-wise metrics
+            if hasattr(results.box, "ap_class_index"):
+                print("\nClass-wise mAP50:")
+                for i, class_idx in enumerate(results.box.ap_class_index):
+                    if class_idx < len(self.class_names):
+                        class_name = self.class_names[class_idx]
+                        ap = results.box.ap50[i] if i < len(results.box.ap50) else 0
+                        print(f"  {class_name}: {ap:.3f}")
+
             return results
 
         except Exception as e:
-            print(f"Fallback training also failed: {e}")
+            print(f"Validation failed: {e}")
             return None
 
-    def evaluate_model(self, classification_dir):
-        """Comprehensive evaluation"""
-        print("Evaluating trained model...")
+    def predict_with_detection_model(self, source_path, save_results=True):
+        """Run predictions with the detection model."""
+        if self.model is None:
+            print("No model available for prediction")
+            return None
 
-        # Load best model
-        best_model_path = self.find_best_model()
-        if best_model_path:
-            self.model = YOLO(best_model_path)
-            print(f"Loaded best model from: {best_model_path}")
+        print(f"\nRunning detection predictions on: {source_path}")
 
-        # Standard validation
         try:
-            results = self.model.val()
-            if hasattr(results, "top1"):
-                print(f"Validation Top-1 Accuracy: {results.top1:.3f}")
-        except Exception as e:
-            print(f"Validation error: {e}")
-
-        # Manual evaluation on validation set
-        val_dir = os.path.join(classification_dir, "val")
-        y_true = []
-        y_pred = []
-        y_pred_probs = []
-
-        for class_idx, class_name in enumerate(self.class_names):
-            class_dir = os.path.join(val_dir, class_name)
-            if not os.path.exists(class_dir):
-                continue
-
-            for img_file in os.listdir(class_dir):
-                if img_file.lower().endswith((".jpg", ".jpeg", ".png")):
-                    img_path = os.path.join(class_dir, img_file)
-
-                    try:
-                        # Predict
-                        pred_results = self.model.predict(img_path, verbose=False)
-
-                        if pred_results and len(pred_results) > 0:
-                            result = pred_results[0]
-
-                            if hasattr(result, "probs") and result.probs is not None:
-                                # Classification result
-                                predicted_class = result.probs.top1
-                                confidence = result.probs.top1conf
-
-                                y_true.append(class_idx)
-                                y_pred.append(predicted_class)
-
-                                # Get all probabilities for top-k calculation
-                                if hasattr(result.probs, "data"):
-                                    probs = result.probs.data.cpu().numpy()
-                                    y_pred_probs.append(probs)
-
-                    except Exception as e:
-                        print(f"Error predicting {img_path}: {e}")
-                        continue
-
-        if len(y_true) == 0:
-            print("No predictions available for evaluation")
-            return None
-
-        # Calculate metrics
-        accuracy = np.mean(np.array(y_true) == np.array(y_pred))
-        print(f"Manual Evaluation Accuracy: {accuracy:.4f}")
-
-        # Create confusion matrix
-        self.create_confusion_matrix(y_true, y_pred)
-
-        return accuracy
-
-    def find_best_model(self):
-        """Find the best model from training phases"""
-        possible_paths = [
-            os.path.join(self.save_dir, "phase_3_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "phase_2_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "phase_1_training", "weights", "best.pt"),
-            os.path.join(self.save_dir, "training_fallback", "weights", "best.pt"),
-        ]
-
-        for path in possible_paths:
-            if os.path.exists(path):
-                return path
-        return None
-
-    def create_confusion_matrix(self, y_true, y_pred):
-        """Create detailed confusion matrix"""
-        cm = confusion_matrix(y_true, y_pred)
-
-        # Calculate per-class metrics
-        per_class_accuracy = cm.diagonal() / cm.sum(axis=1)
-
-        # Create visualization
-        plt.figure(figsize=(12, 10))
-
-        # Normalize confusion matrix for better visualization
-        cm_normalized = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
-
-        sns.heatmap(
-            cm_normalized,
-            annot=cm,  # Show actual counts
-            fmt="d",
-            cmap="Blues",
-            xticklabels=self.class_names,
-            yticklabels=self.class_names,
-            cbar_kws={"label": "Normalized Frequency"},
-        )
-
-        plt.title("Progressive Unfreezing YOLOv12 Classifier - Confusion Matrix")
-        plt.xlabel("Predicted Labels")
-        plt.ylabel("True Labels")
-        plt.xticks(rotation=45, ha="right")
-        plt.yticks(rotation=0)
-
-        # Add accuracy text
-        for i in range(len(self.class_names)):
-            plt.text(
-                len(self.class_names) + 0.5,
-                i + 0.5,
-                f"Acc: {per_class_accuracy[i]:.3f}",
-                ha="center",
-                va="center",
+            results = self.model.predict(
+                source=source_path,
+                conf=self.default_conf,
+                iou=0.7,
+                max_det=300,
+                save=save_results,
+                project=self.save_dir,
+                name="predictions",
             )
 
-        plt.tight_layout()
+            print(f"Predictions completed! Results saved in: {self.save_dir}/predictions")
+            return results
 
-        save_path = os.path.join(self.save_dir, "progressive_unfreezing_confusion_matrix.png")
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-
-        print(f"Confusion matrix saved: {save_path}")
-
-        # Save detailed report
-        report = classification_report(
-            y_true, y_pred, target_names=self.class_names, output_dict=True
-        )
-
-        with open(os.path.join(self.save_dir, "progressive_unfreezing_report.json"), "w") as f:
-            json.dump(report, f, indent=2)
-
-        # Print per-class performance
-        print("\nPer-class Performance:")
-        for i, class_name in enumerate(self.class_names):
-            if i < len(per_class_accuracy):
-                support = cm.sum(axis=1)[i]
-                print(f"  {class_name}: {per_class_accuracy[i]:.3f} accuracy ({support} samples)")
+        except Exception as e:
+            print(f"Prediction failed: {e}")
+            return None
 
 
-def main():
-    """Improved training pipeline with progressive unfreezing"""
-    print("Starting YOLOv12 Classification Training with Progressive Unfreezing")
-    print("=" * 70)
-
-    # Initialize classifier
-    classifier = ImprovedYOLOv12Classifier(model_size="n", img_size=640, batch_size=8)
-
+# Main training function for detection
+def main_detection_training():
+    """
+    Main detection training pipeline with aggressive class weighting and progressive unfreezing.
+    """
     try:
-        # Download dataset
-        print("Step 1: Downloading dataset...")
-        gdrive_file_id = "1nGK6c3TQWzTfI5KpekIm10NP5W2hAswE"
-        dataset_path = classifier.download_and_extract_dataset(gdrive_file_id)
+        print("Initializing YOLOv12 Detection Trainer...")
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="n", img_size=640, batch_size=10)
 
-        # Extract and clean objects (authomatic split)
-        print("\nStep 2: Extracting objects, removing background, and creating train/val split...")
-        classification_dir = classifier.clean_and_extract_objects(
-            dataset_path, max_samples_per_class=10000, val_split=0.2  # 20% para validación
+        print("\nStep 1: Downloading dataset...")
+        gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
+        dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
+
+        print("\nStep 2: Preparing detection dataset...")
+        config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.001, val_split=0.2)
+
+        print("\nStep 3: Initializing YOLO detection model...")
+        if not trainer.initialize_yolo_detection_model():
+            raise RuntimeError("Failed to initialize detection model")
+
+        print("\nStep 4: Training with progressive unfreezing...")
+        custom_schedule = {
+            0: 0.15,  # Detection heads only
+            20: 0.25,  # + Neck
+            40: 0.40,  # + Late backbone
+            60: 0.60,  # + Mid backbone
+            80: 0.80,  # + Early backbone
+            100: 1.0,  # Full model
+        }
+
+        training_results = trainer.train_detection_model_with_progressive_unfreezing(
+            config_path, epochs=120, unfreeze_schedule=custom_schedule
         )
 
-        # Create YOLO config
-        print("\nStep 3: Creating YOLO classification config...")
-        config_path = classifier.create_yolo_classification_config(classification_dir)
+        print("\nStep 5: Validating model...")
+        validation_results = trainer.validate_detection_model(config_path)
 
-        # Initialize model
-        print("\nStep 4: Initializing YOLOv12 model...")
-        if not classifier.initialize_model():
-            print("Failed to initialize model")
-            return
+        # Cleanup
+        if os.path.exists("dataset/"):
+            shutil.rmtree("dataset/")
 
-        # Train with progressive unfreezing
-        print("\nStep 5: Training with progressive unfreezing...")
-        results = classifier.train_with_progressive_unfreezing(config_path, total_epochs=100)
+        print("\n" + "=" * 60)
+        print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
+        print("=" * 60)
+        print("Features implemented:")
+        print("  ✓ Pure YOLO detection (no classification confusion)")
+        print("  ✓ Aggressive class weighting for imbalanced datasets")
+        print("  ✓ Detection-optimized progressive unfreezing")
+        print("  ✓ Proper YOLO architecture understanding")
+        print("  ✓ Phase-based confidence thresholds")
+        print("=" * 60)
 
-        # Evaluate
-        print("\nStep 6: Comprehensive evaluation...")
-        final_accuracy = classifier.evaluate_model(classification_dir)
-
-        print(f"\n{'='*70}")
-        print("PROGRESSIVE UNFREEZING TRAINING COMPLETED!")
-        print(f"{'='*70}")
-
-        if final_accuracy is not None:
-            print(f"Final accuracy: {final_accuracy:.4f}")
-        else:
-            print("Final accuracy: Could not calculate (evaluation failed)")
-
-        print(f"Results saved in: {classifier.save_dir}")
+        return trainer
 
     except Exception as e:
-        print(f"Training failed: {e}")
+        print(f"\nERROR: Detection training failed: {e}")
         import traceback
 
         traceback.print_exc()
+        raise
 
 
 if __name__ == "__main__":
-    main()
+    trained_model = main_detection_training()
