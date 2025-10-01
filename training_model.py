@@ -1073,7 +1073,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="n", img_size=640, batch_size=10)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
