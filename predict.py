@@ -29,26 +29,24 @@ CLASS_COLORS = {
     18: (0, 191, 255),  # Deep Sky Blue
 }
 CLASSES = {
-    0: "CANTINE",
-    1: "HIGH-TABLE",
-    2: "LOUNGE",
-    3: "MEETING-TABLE",
-    4: "PHONEBOOTH",
-    5: "PLANTS",
-    6: "PRIVATE-DESK",
-    7: "PRIVATE-OFFICE",
-    8: "REST-FOR-1",
-    9: "REST-FOR-2",
-    10: "ROUND-TABLE",
-    11: "STORAGE",
+    0: "LOUNGE",
+    1: "MEETING-TABLE",
+    2: "PHONEBOOTH",
+    3: "PLANTS",
+    4: "PRIVATE-DESK",
+    5: "REST-FOR-1",
+    6: "REST-FOR-2",
+    7: "ROUND-TABLE",
+    8: "STORAGE",
 }
 
 
-def load_model(model_name: str):
+def load_model(model_name: str, phase_folder: str):
     model_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "models",
+        "Models",
         model_name,
+        phase_folder,
         "weights",
         "best.pt",
     )
@@ -65,7 +63,7 @@ def count_names(class_ids: list[str]):
 def predict_model(model: YOLO, image_path: str, conf: float = 0.4) -> list[Results]:
     return model.predict(  # type: ignore
         source=image_path,
-        conf=conf,
+        # conf=conf,
         # iou=iou_treshold,
     )
 
@@ -209,11 +207,12 @@ def paint_predictions(results: list[Results], image_path: str):
 
 if __name__ == "__main__":
 
-    model_name = ""
-    image_file = ""
-    conf = 0.4
+    model_name = "YOLOv12_Detection_10-01-2025_09-25-25"
+    phase_folder = "detection_phase_6"
+    image_file = "0sfz9173.png"
+    conf = 0.1
 
-    model = load_model(model_name=model_name)
+    model = load_model(model_name=model_name, phase_folder=phase_folder)
 
     image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
     image_path = os.path.join(image_dir, image_file)

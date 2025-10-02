@@ -328,7 +328,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         try:
             with open(label_path, "r") as f:
                 lines = f.readlines()
-        except:
+        except FileExistsError or FileNotFoundError:
             return {
                 "kept_lines": [],
                 "total_boxes": 0,
@@ -491,7 +491,7 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         # Weight statistics
         weight_ratio = max(weight_values) / min(weight_values)
-        print(f"\nWeight statistics:")
+        print("\nWeight statistics:")
         print(f"  Max/Min ratio: {weight_ratio:.1f}")
         print(f"  Mean weight: {np.mean(weight_values):.3f}")
         print(f"  Weight std: {np.std(weight_values):.3f}")
@@ -856,7 +856,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print(
             f"  ✓ Aggressive class weights (max ratio: {max(self.class_weights.values())/min(self.class_weights.values()):.1f})"
         )
-        print(f"  ✓ Detection-optimized architecture understanding")
+        print("  ✓ Detection-optimized architecture understanding")
 
         # Base training arguments for detection
         base_training_args = {
