@@ -41,14 +41,6 @@ class AdaptiveYOLOv12DetectionTrainer:
         self.batch_size = batch_size
         self.default_conf = default_conf
 
-        # Confidence thresholds by training phase
-        self.confidence_thresholds = {
-            "early": 0.15,  # Permissive for early learning
-            "mid": 0.25,  # Standard threshold
-            "late": 0.35,  # Stricter for refinement
-            "final": 0.45,  # Final strict threshold
-        }
-
         self.model = None
         self.class_names = []
         self.original_class_names = []
@@ -328,7 +320,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         try:
             with open(label_path, "r") as f:
                 lines = f.readlines()
-        except FileExistsError or FileNotFoundError:
+        except:
             return {
                 "kept_lines": [],
                 "total_boxes": 0,
@@ -491,7 +483,7 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         # Weight statistics
         weight_ratio = max(weight_values) / min(weight_values)
-        print("\nWeight statistics:")
+        print(f"\nWeight statistics:")
         print(f"  Max/Min ratio: {weight_ratio:.1f}")
         print(f"  Mean weight: {np.mean(weight_values):.3f}")
         print(f"  Weight std: {np.std(weight_values):.3f}")
@@ -618,12 +610,12 @@ class AdaptiveYOLOv12DetectionTrainer:
         if unfreeze_schedule is None:
             # Detection-optimized unfreezing schedule
             unfreeze_schedule = {
-                0: 0.15,  # Start with detection heads only
-                20: 0.25,  # Add neck components
-                40: 0.40,  # Add late backbone
-                60: 0.60,  # Add mid backbone
-                80: 0.80,  # Add early backbone
-                100: 1.0,  # Full model
+                0: 0.20,  # Detection heads only (epochs 0-30)
+                30: 0.40,  # + Neck PAN (epochs 30-60)
+                60: 0.60,  # + Neck FPN (epochs 60-100)
+                100: 0.75,  # + Late backbone (epochs 100-140)
+                140: 0.90,  # + Mid backbone (epochs 140-180)
+                180: 1.0,  # Full model - complete fine-tuning (epochs 180-210)
             }
 
         print("Setting up YOLO detection progressive unfreezing...")
@@ -812,17 +804,8 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return False
 
-    def get_lr_by_phase(self, phase_number, base_lr=0.001):
-        """Ajusta learning rate progresivamente."""
-        if phase_number <= 2:
-            return base_lr * 1.0  # LR normal
-        elif phase_number <= 4:
-            return base_lr * 0.5  # Reduce LR
-        else:
-            return base_lr * 0.1  # Low LR for fine-tuning
-
     def train_detection_model_with_progressive_unfreezing(
-        self, config_path, epochs=120, unfreeze_schedule=None
+        self, config_path, epochs=210, unfreeze_schedule=None
     ):
         """
         Train YOLO detection model with progressive unfreezing and aggressive class weights.
@@ -856,7 +839,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print(
             f"  ✓ Aggressive class weights (max ratio: {max(self.class_weights.values())/min(self.class_weights.values()):.1f})"
         )
-        print("  ✓ Detection-optimized architecture understanding")
+        print(f"  ✓ Detection-optimized architecture understanding")
 
         # Base training arguments for detection
         base_training_args = {
@@ -877,15 +860,15 @@ class AdaptiveYOLOv12DetectionTrainer:
             "lrf": 0.001,
             "momentum": 0.95,
             "weight_decay": 0.0005,
-            "warmup_epochs": 6,
+            "warmup_epochs": 8,
             "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
-            "cos_lr": False,
+            "cos_lr": True,
             "verbose": True,
             "dropout": 0.1,
             "conf": self.default_conf,
             "iou": 0.7,  # Detection-specific
-            "max_det": 300,  # Maximum detections per image
+            "max_det": 350,  # Maximum detections per image
         }
 
         # Phase-based training
@@ -927,9 +910,6 @@ class AdaptiveYOLOv12DetectionTrainer:
                     self._apply_detection_class_weights()
                     self._apply_detection_unfreezing_phase(phase_start_epoch)
 
-            # Apply confidence threshold for current phase
-            current_lr = self.get_lr_by_phase(i + 1, base_lr=0.01)
-
             # Configure training for this phase
             phase_training_args = base_training_args.copy()
             phase_training_args.update(
@@ -937,11 +917,8 @@ class AdaptiveYOLOv12DetectionTrainer:
                     "epochs": phase_epochs,
                     "name": f"detection_phase_{i+1}",
                     "conf": 0.50,
-                    "lr0": current_lr,
                 }
             )
-
-            print(f"Phase {i+1}: Learning rate = {current_lr}")
 
             # Execute training
             print(f"Starting detection training phase {i+1}...")
@@ -952,7 +929,6 @@ class AdaptiveYOLOv12DetectionTrainer:
                         "phase": i + 1,
                         "start_epoch": phase_start_epoch,
                         "epochs": phase_epochs,
-                        "lr": current_lr,
                         "results": phase_results,
                     }
                 )
@@ -1089,16 +1065,16 @@ def main_detection_training():
 
         print("\nStep 4: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.15,  # Detection heads only
-            20: 0.25,  # + Neck
-            40: 0.40,  # + Late backbone
-            60: 0.60,  # + Mid backbone
-            80: 0.80,  # + Early backbone
-            100: 1.0,  # Full model
+            0: 0.20,  # Detection heads only (epochs 0-30)
+            30: 0.40,  # + Neck PAN (epochs 30-60)
+            60: 0.60,  # + Neck FPN (epochs 60-100)
+            100: 0.75,  # + Late backbone (epochs 100-140)
+            140: 0.90,  # + Mid backbone (epochs 140-180)
+            180: 1.0,  # Full model - complete fine-tuning (epochs 180-210)
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=120, unfreeze_schedule=custom_schedule
+            config_path, epochs=210, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 5: Validating model...")
