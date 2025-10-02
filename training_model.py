@@ -83,7 +83,7 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return extract_path
 
-    def prepare_detection_dataset(self, dataset_path, min_area=0.0001, val_split=0.2):
+    def prepare_detection_dataset(self, dataset_path, min_area=0.0, val_split=0.2):
         """
         Prepare YOLO detection dataset with proper structure and aggressive class weighting.
 
@@ -271,6 +271,24 @@ class AdaptiveYOLOv12DetectionTrainer:
         class_counts = {name: 0 for name in self.class_names}
         total_boxes, kept_boxes = 0, 0
         processed_images = 0
+
+        print(f"Processing {split_name} with min_area: {min_area}")
+        print(f"id_map covers classes: {list(self.id_map.keys())}")
+
+        # Procesa solo los primeros 10 archivos para debug
+        debug_images = images[:10] if len(images) > 10 else images
+        sample_stats = []
+
+        for img_file in debug_images:
+            src_label_path = os.path.join(source_labels_dir, os.path.splitext(img_file)[0] + ".txt")
+            if os.path.exists(src_label_path):
+                with open(src_label_path, "r") as f:
+                    lines = f.readlines()
+                    sample_stats.append(len(lines))
+
+        print(
+            f"Sample - Avg boxes per image: {sum(sample_stats)/len(sample_stats) if sample_stats else 0}"
+        )
 
         for img_file in images:
             # Copy image
@@ -621,7 +639,6 @@ class AdaptiveYOLOv12DetectionTrainer:
         print("Setting up YOLO detection progressive unfreezing...")
 
         # Get trainable parameters
-        all_params = []
         param_info = []
 
         for name, param in self.model.model.named_parameters():
@@ -1057,7 +1074,7 @@ def main_detection_training():
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
-        config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.001, val_split=0.2)
+        config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.0, val_split=0.2)
 
         print("\nStep 3: Initializing YOLO detection model...")
         if not trainer.initialize_yolo_detection_model():
