@@ -882,7 +882,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
-            "dropout": 0.1,
+            "dropout": 0.2,
             "conf": self.default_conf,
             "iou": 0.7,  # Detection-specific
             "max_det": 350,  # Maximum detections per image
@@ -1070,7 +1070,7 @@ def main_detection_training():
         trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
+        gdrive_file_id = "1v0wa_oqYF2iG0gy_AZ62giTcyXs_X5Ot"
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
