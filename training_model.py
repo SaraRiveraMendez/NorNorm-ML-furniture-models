@@ -76,10 +76,15 @@ class AdaptiveYOLOv12DetectionTrainer:
             print("Downloading dataset from Google Drive...")
             gdown.download(url, temp_zip_path, quiet=False)
 
-            extract_path = ""
+            extract_path = "dataset/"
             print("Extracting dataset...")
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
+
+            # Detecta si hay una carpeta extra
+            contents = os.listdir(extract_path)
+            if len(contents) == 1 and os.path.isdir(os.path.join(extract_path, contents[0])):
+                extract_path = os.path.join(extract_path, contents[0])
 
         return extract_path
 
