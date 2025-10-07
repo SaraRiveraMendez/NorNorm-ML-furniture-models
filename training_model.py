@@ -73,20 +73,33 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_zip_path = os.path.join(temp_dir, output_filename)
-            print("Downloading dataset from Google Drive...")
+            print("📥 Descargando dataset desde Google Drive...")
             gdown.download(url, temp_zip_path, quiet=False)
 
             extract_path = "dataset/"
-            print("Extracting dataset...")
+            print("📂 Extrayendo dataset...")
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
-            # Detecta si hay una carpeta extra
-            contents = os.listdir(extract_path)
-            if len(contents) == 1 and os.path.isdir(os.path.join(extract_path, contents[0])):
-                extract_path = os.path.join(extract_path, contents[0])
+            # Buscar data.yaml en toda la jerarquía
+            yaml_path = None
+            for root, dirs, files in os.walk(extract_path):
+                if "data.yaml" in files:
+                    yaml_path = os.path.join(root, "data.yaml")
+                    break
 
-        return extract_path
+            if yaml_path is None:
+                raise FileNotFoundError(
+                    "❌ No se encontró 'data.yaml' dentro del dataset extraído."
+                )
+
+            # Ajustar extract_path para que sea la carpeta que contiene data.yaml
+            extract_path = os.path.dirname(yaml_path)
+
+            print(
+                f"✅ Dataset extraído correctamente. Archivo 'data.yaml' encontrado en: {yaml_path}"
+            )
+            return extract_path
 
     def prepare_detection_dataset(self, dataset_path, min_area=0.0, val_split=0.2):
         """
