@@ -822,7 +822,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         return False
 
     def train_detection_model_with_progressive_unfreezing(
-        self, config_path, epochs=210, unfreeze_schedule=None
+        self, config_path, epochs=160, unfreeze_schedule=None
     ):
         """
         Train YOLO detection model with progressive unfreezing and aggressive class weights.
@@ -1092,7 +1092,7 @@ def main_detection_training():
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=210, unfreeze_schedule=custom_schedule
+            config_path, epochs=160, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 5: Validating model...")
