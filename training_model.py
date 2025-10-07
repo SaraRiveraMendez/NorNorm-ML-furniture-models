@@ -26,7 +26,7 @@ class AdaptiveYOLOv12DetectionTrainer:
     Focuses purely on object detection with proper YOLO architecture understanding.
     """
 
-    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.50):
+    def __init__(self, model_size="s", img_size=640, batch_size=-1, default_conf=0.40):
         """
         Initialize the YOLOv12 Detection Trainer.
 
@@ -628,12 +628,12 @@ class AdaptiveYOLOv12DetectionTrainer:
         if unfreeze_schedule is None:
             # Detection-optimized unfreezing schedule
             unfreeze_schedule = {
-                0: 0.20,  # Detection heads only (epochs 0-30)
-                30: 0.40,  # + Neck PAN (epochs 30-60)
-                60: 0.60,  # + Neck FPN (epochs 60-100)
-                100: 0.75,  # + Late backbone (epochs 100-140)
-                140: 0.90,  # + Mid backbone (epochs 140-180)
-                180: 1.0,  # Full model - complete fine-tuning (epochs 180-210)
+                0: 0.20,  # Detection heads only
+                30: 0.40,  # + Neck PAN
+                60: 0.60,  # + Neck FPN
+                90: 0.75,  # + Late backbone
+                120: 0.90,  # + Mid backbone
+                150: 1.0,  # Full model - complete fine-tuning
             }
 
         print("Setting up YOLO detection progressive unfreezing...")
@@ -863,7 +863,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "data": config_path,
             "imgsz": self.img_size,
             "batch": self.batch_size,
-            "device": "cpu",
+            "device": 0,
             "workers": 4,
             "patience": 20,
             "save": True,
@@ -872,19 +872,20 @@ class AdaptiveYOLOv12DetectionTrainer:
             "project": self.save_dir,
             "exist_ok": True,
             "pretrained": True,
-            "optimizer": "SGD",
-            "lr0": 0.01,
-            "lrf": 0.001,
+            "optimizer": "AdamW",
+            "lr0": 0.001,
+            "lrf": 0.002,
             "momentum": 0.95,
             "weight_decay": 0.0005,
-            "warmup_epochs": 8,
+            "warmup_epochs": 6,
             "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
-            "dropout": 0.2,
+            "dropout": 0.1,
             "conf": self.default_conf,
-            "iou": 0.7,  # Detection-specific
+            "iou": 0.6,  # Detection-specific
+            "close_mosaic": 10,
             "max_det": 350,  # Maximum detections per image
         }
 
@@ -1067,7 +1068,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=-1)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "1oba2agBDxVIXgReBeGWZey03ucYTQ-Tx"
@@ -1082,12 +1083,12 @@ def main_detection_training():
 
         print("\nStep 4: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads only (epochs 0-30)
-            30: 0.40,  # + Neck PAN (epochs 30-60)
-            60: 0.60,  # + Neck FPN (epochs 60-100)
-            100: 0.75,  # + Late backbone (epochs 100-140)
-            140: 0.90,  # + Mid backbone (epochs 140-180)
-            180: 1.0,  # Full model - complete fine-tuning (epochs 180-210)
+            0: 0.20,  # Detection heads only
+            30: 0.40,  # + Neck PAN
+            60: 0.60,  # + Neck FPN
+            90: 0.75,  # + Late backbone
+            120: 0.90,  # + Mid backbone
+            150: 1.0,  # Full model - complete fine-tuning
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
