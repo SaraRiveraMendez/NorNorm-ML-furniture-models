@@ -76,7 +76,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             print("Downloading dataset from Google Drive...")
             gdown.download(url, temp_zip_path, quiet=False)
 
-            extract_path = "."
+            extract_path = ""
             print("Extracting dataset...")
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
