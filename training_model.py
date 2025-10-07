@@ -884,8 +884,8 @@ class AdaptiveYOLOv12DetectionTrainer:
             "verbose": True,
             "dropout": 0.1,
             "conf": self.default_conf,
-            "iou": 0.6,  # Detection-specific
-            "close_mosaic": 10,
+            "iou": 0.5,  # Detection-specific
+            "close_mosaic": 5,
             "max_det": 350,  # Maximum detections per image
         }
 
@@ -1071,7 +1071,7 @@ def main_detection_training():
         trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=-1)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "1oba2agBDxVIXgReBeGWZey03ucYTQ-Tx"
+        gdrive_file_id = "1YusmkmrHFEjM-zb4-CiWajnjyFoNu_Wn"
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
