@@ -1259,7 +1259,7 @@ class AdaptiveYOLOv12DetectionTrainer:
                 source=source_path,
                 conf=self.default_conf,
                 iou=0.5,
-                max_det=300,
+                max_det=350,
                 save=save_results,
                 project=self.save_dir,
                 name="predictions",
