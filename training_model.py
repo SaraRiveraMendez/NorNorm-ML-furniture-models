@@ -26,7 +26,7 @@ class AdaptiveYOLOv12DetectionTrainer:
     Focuses purely on object detection with proper YOLO architecture understanding.
     """
 
-    def __init__(self, model_size="s", img_size=640, batch_size=12, default_conf=0.40):
+    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.35):
         """
         Initialize the YOLOv12 Detection Trainer.
 
@@ -434,7 +434,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print(f"Detection dataset imbalance ratio: {imbalance_ratio:.2f}")
 
         # Apply aggressive weighting strategy based on imbalance severity
-        if imbalance_ratio > 50:
+        if imbalance_ratio > 40:
             # Logarithmic weighting for extreme cases
             log_weights = np.log(max_count + 1) / np.log(counts + 1)
             aggressive_weights = log_weights * 3.0  # High amplification
@@ -608,9 +608,9 @@ class AdaptiveYOLOv12DetectionTrainer:
                                     weight=weighted_tensor, reduction="none"
                                 )(cls_preds, cls_targets)
 
-                                # Focal loss with alpha=2 for recall boost
+                                # Focal loss with alpha=3 for recall boost
                                 pt = torch.exp(-ce_loss)
-                                focal_loss = (1 - pt) ** 2 * ce_loss
+                                focal_loss = (1 - pt) ** 3 * ce_loss
 
                                 loss_dict["cls"] = focal_loss.mean()
 
@@ -646,12 +646,12 @@ class AdaptiveYOLOv12DetectionTrainer:
         if unfreeze_schedule is None:
             # Detection-optimized unfreezing schedule
             unfreeze_schedule = {
-                0: 0.20,  # Detection heads only
-                30: 0.40,  # + Neck PAN
-                60: 0.60,  # + Neck FPN
-                90: 0.75,  # + Late backbone
-                120: 0.90,  # + Mid backbone
-                150: 1.0,  # Full model - complete fine-tuning
+                0: 0.20,  # Detection heads - 25 épocas
+                25: 0.40,  # + Neck PAN - 25 épocas
+                50: 0.60,  # + Neck FPN - 30 épocas
+                80: 0.75,  # + Late Backbone - 30 épocas
+                110: 0.90,  # + Mid Backbone - 35 épocas
+                145: 1.0,  # Full model - 15 épocas
             }
 
         print("Setting up YOLO detection progressive unfreezing...")
@@ -891,9 +891,9 @@ class AdaptiveYOLOv12DetectionTrainer:
             "exist_ok": True,
             "pretrained": True,
             "optimizer": "AdamW",
-            "lr0": 0.001,
-            "lrf": 0.002,
-            "momentum": 0.95,
+            "lr0": 0.0008,
+            "lrf": 0.001,
+            "momentum": 0.9,
             "weight_decay": 0.0005,
             "warmup_epochs": 6,
             "warmup_momentum": 0.85,
@@ -903,7 +903,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "dropout": 0.1,
             "conf": self.default_conf,
             "iou": 0.5,  # Detection-specific
-            "close_mosaic": 5,
+            "close_mosaic": 10,
             "max_det": 350,  # Maximum detections per image
         }
 
@@ -1022,6 +1022,200 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         print(f"Training summary saved: {summary_path}")
 
+    def validate_all_checkpoints(self, config_path):
+        """
+        Validate all checkpoints (best.pt and last.pt) from all training phases.
+        Find and return the best overall model.
+
+        Args:
+            config_path (str): Path to YOLO detection config
+
+        Returns:
+            dict: Comprehensive validation results
+        """
+        print("\n" + "=" * 70)
+        print("COMPREHENSIVE CHECKPOINT VALIDATION")
+        print("=" * 70)
+
+        all_results = []
+
+        # Iterate through all phases
+        phase_dirs = sorted(
+            [d for d in os.listdir(self.save_dir) if d.startswith("detection_phase_")]
+        )
+
+        for phase_dir in phase_dirs:
+            phase_num = int(phase_dir.split("_")[-1])
+            phase_path = os.path.join(self.save_dir, phase_dir)
+            weights_dir = os.path.join(phase_path, "weights")
+
+            if not os.path.exists(weights_dir):
+                continue
+
+            # Validate best.pt
+            best_path = os.path.join(weights_dir, "best.pt")
+            if os.path.exists(best_path):
+                print(f"\nValidating Phase {phase_num} - best.pt...")
+                try:
+                    model = YOLO(best_path)
+                    results = model.val(data=config_path, conf=0.25, iou=0.7, verbose=False)
+
+                    result_data = {
+                        "phase": phase_num,
+                        "checkpoint": "best.pt",
+                        "path": best_path,
+                        "mAP50": float(results.box.map50),
+                        "mAP50-95": float(results.box.map),
+                        "precision": float(results.box.mp) if hasattr(results.box, "mp") else 0.0,
+                        "recall": float(results.box.mr) if hasattr(results.box, "mr") else 0.0,
+                    }
+
+                    # Extract class-wise results
+                    class_results = self._extract_class_results(results)
+                    result_data["class_results"] = class_results
+
+                    all_results.append(result_data)
+                    print(
+                        f"  mAP50: {result_data['mAP50']:.3f} | mAP50-95: {result_data['mAP50-95']:.3f}"
+                    )
+
+                except Exception as e:
+                    print(f"  Error validating best.pt: {e}")
+
+            # Validate last.pt
+            last_path = os.path.join(weights_dir, "last.pt")
+            if os.path.exists(last_path):
+                print(f"Validating Phase {phase_num} - last.pt...")
+                try:
+                    model = YOLO(last_path)
+                    results = model.val(data=config_path, conf=0.25, iou=0.7, verbose=False)
+
+                    result_data = {
+                        "phase": phase_num,
+                        "checkpoint": "last.pt",
+                        "path": last_path,
+                        "mAP50": float(results.box.map50),
+                        "mAP50-95": float(results.box.map),
+                        "precision": float(results.box.mp) if hasattr(results.box, "mp") else 0.0,
+                        "recall": float(results.box.mr) if hasattr(results.box, "mr") else 0.0,
+                    }
+
+                    # Extract class-wise results
+                    class_results = self._extract_class_results(results)
+                    result_data["class_results"] = class_results
+
+                    all_results.append(result_data)
+                    print(
+                        f"  mAP50: {result_data['mAP50']:.3f} | mAP50-95: {result_data['mAP50-95']:.3f}"
+                    )
+
+                except Exception as e:
+                    print(f"  Error validating last.pt: {e}")
+
+        if not all_results:
+            print("No checkpoints found to validate!")
+            return None
+
+        # Find best overall model
+        best_overall = max(all_results, key=lambda x: x["mAP50-95"])
+
+        print("\n" + "=" * 70)
+        print("CHECKPOINT COMPARISON SUMMARY")
+        print("=" * 70)
+        print(
+            f"{'Phase':<8} {'Checkpoint':<12} {'mAP50':<10} {'mAP50-95':<10} {'Precision':<10} {'Recall':<10}"
+        )
+        print("-" * 70)
+
+        for result in all_results:
+            marker = " 🏆" if result == best_overall else ""
+            print(
+                f"{result['phase']:<8} {result['checkpoint']:<12} "
+                f"{result['mAP50']:<10.3f} {result['mAP50-95']:<10.3f} "
+                f"{result['precision']:<10.3f} {result['recall']:<10.3f}{marker}"
+            )
+
+        print("\n" + "=" * 70)
+        print("BEST OVERALL MODEL")
+        print("=" * 70)
+        print(f"Phase:        {best_overall['phase']}")
+        print(f"Checkpoint:   {best_overall['checkpoint']}")
+        print(f"Path:         {best_overall['path']}")
+        print(f"mAP50:        {best_overall['mAP50']:.3f}")
+        print(f"mAP50-95:     {best_overall['mAP50-95']:.3f}")
+        print(f"Precision:    {best_overall['precision']:.3f}")
+        print(f"Recall:       {best_overall['recall']:.3f}")
+
+        # Print class-wise results for best model
+        if best_overall["class_results"]:
+            print("\n" + "=" * 70)
+            print("BEST MODEL - CLASS-WISE RESULTS")
+            print("=" * 70)
+            print(f"{'Class':<20} {'Precision':<12} {'Recall':<12} {'mAP50':<12} {'mAP50-95':<12}")
+            print("-" * 70)
+
+            for class_result in best_overall["class_results"]:
+                print(
+                    f"{class_result['class']:<20} "
+                    f"{class_result['precision']:<12.3f} "
+                    f"{class_result['recall']:<12.3f} "
+                    f"{class_result['mAP50']:<12.3f} "
+                    f"{class_result['mAP50-95']:<12.3f}"
+                )
+
+        # Save comprehensive results
+        self._save_validation_comparison(all_results, best_overall)
+
+        # Copy best model to main directory
+        best_model_dest = os.path.join(self.save_dir, "best_overall_model.pt")
+        shutil.copy2(best_overall["path"], best_model_dest)
+        print(f"\nBest model copied to: {best_model_dest}")
+
+        return {
+            "all_results": all_results,
+            "best_overall": best_overall,
+            "best_model_path": best_model_dest,
+        }
+
+    def _extract_class_results(self, results):
+        """
+        Extract class-wise metrics from validation results.
+
+        Args:
+            results: YOLO validation results object
+
+        Returns:
+            list: List of dicts with class-wise metrics
+        """
+        class_results = []
+
+        if hasattr(results, "box") and hasattr(results.box, "ap_class_index"):
+            for idx, class_idx in enumerate(results.box.ap_class_index):
+                if class_idx < len(self.class_names):
+                    class_data = {
+                        "class": self.class_names[class_idx],
+                        "class_id": int(class_idx),
+                        "precision": (
+                            float(results.box.p[idx])
+                            if hasattr(results.box, "p") and idx < len(results.box.p)
+                            else 0.0
+                        ),
+                        "recall": (
+                            float(results.box.r[idx])
+                            if hasattr(results.box, "r") and idx < len(results.box.r)
+                            else 0.0
+                        ),
+                        "mAP50": (
+                            float(results.box.ap50[idx]) if idx < len(results.box.ap50) else 0.0
+                        ),
+                        "mAP50-95": (
+                            float(results.box.ap[idx]) if idx < len(results.box.ap) else 0.0
+                        ),
+                    }
+                    class_results.append(class_data)
+
+        return class_results
+
     def validate_detection_model(self, config_path):
         """Validate the trained detection model."""
         if self.model is None:
@@ -1064,7 +1258,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             results = self.model.predict(
                 source=source_path,
                 conf=self.default_conf,
-                iou=0.7,
+                iou=0.5,
                 max_det=300,
                 save=save_results,
                 project=self.save_dir,
@@ -1080,16 +1274,17 @@ class AdaptiveYOLOv12DetectionTrainer:
 
 
 # Main training function for detection
+# Main training function for detection
 def main_detection_training():
     """
     Main detection training pipeline with aggressive class weighting and progressive unfreezing.
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=12)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "1YusmkmrHFEjM-zb4-CiWajnjyFoNu_Wn"
+        gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
@@ -1101,20 +1296,24 @@ def main_detection_training():
 
         print("\nStep 4: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads only
-            30: 0.40,  # + Neck PAN
-            60: 0.60,  # + Neck FPN
-            90: 0.75,  # + Late backbone
-            120: 0.90,  # + Mid backbone
-            150: 1.0,  # Full model - complete fine-tuning
+            0: 0.20,  # Detection heads - 25 épocas
+            25: 0.40,  # + Neck PAN - 25 épocas
+            50: 0.60,  # + Neck FPN - 30 épocas
+            80: 0.75,  # + Late Backbone - 30 épocas
+            110: 0.90,  # + Mid Backbone - 35 épocas
+            145: 1.0,  # Full model - 15 épocas
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
             config_path, epochs=160, unfreeze_schedule=custom_schedule
         )
 
-        print("\nStep 5: Validating model...")
-        validation_results = trainer.validate_detection_model(config_path)
+        print("\nStep 5: Comprehensive validation of all checkpoints...")
+        validation_results = trainer.validate_all_checkpoints(config_path)
+
+        if validation_results:
+            print(f"\nBest model available at: {validation_results['best_model_path']}")
+            print(f"   Use this model for inference!")
 
         # Cleanup
         if os.path.exists("dataset/"):
@@ -1124,10 +1323,10 @@ def main_detection_training():
         print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 60)
         print("Features implemented:")
+        print("  ✓ Pure YOLO detection (no classification confusion)")
         print("  ✓ Aggressive class weighting for imbalanced datasets")
         print("  ✓ Detection-optimized progressive unfreezing")
         print("  ✓ Proper YOLO architecture understanding")
-        print("  ✓ Phase-based confidence thresholds")
         print("=" * 60)
 
         return trainer
