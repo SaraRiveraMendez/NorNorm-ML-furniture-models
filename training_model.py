@@ -26,7 +26,7 @@ class AdaptiveYOLOv12DetectionTrainer:
     Focuses purely on object detection with proper YOLO architecture understanding.
     """
 
-    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.35):
+    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.30):
         """
         Initialize the YOLOv12 Detection Trainer.
 
@@ -1284,7 +1284,7 @@ def main_detection_training():
         trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "1utJIeXm5Vht0YoYC-R11ltDD30LW9FdA"
+        gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
