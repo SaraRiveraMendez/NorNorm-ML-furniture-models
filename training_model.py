@@ -73,11 +73,11 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_zip_path = os.path.join(temp_dir, output_filename)
-            print("📥 Descargando dataset desde Google Drive...")
+            print("Descargando dataset desde Google Drive...")
             gdown.download(url, temp_zip_path, quiet=False)
 
             extract_path = "dataset/"
-            print("📂 Extrayendo dataset...")
+            print("Extrayendo dataset...")
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
@@ -89,16 +89,12 @@ class AdaptiveYOLOv12DetectionTrainer:
                     break
 
             if yaml_path is None:
-                raise FileNotFoundError(
-                    "❌ No se encontró 'data.yaml' dentro del dataset extraído."
-                )
+                raise FileNotFoundError("No se encontró 'data.yaml' dentro del dataset extraído.")
 
             # Ajustar extract_path para que sea la carpeta que contiene data.yaml
             extract_path = os.path.dirname(yaml_path)
 
-            print(
-                f"✅ Dataset extraído correctamente. Archivo 'data.yaml' encontrado en: {yaml_path}"
-            )
+            print(f"Dataset extraído correctamente. Archivo 'data.yaml' encontrado en: {yaml_path}")
             return extract_path
 
     def prepare_detection_dataset(self, dataset_path, min_area=0.0, val_split=0.2):
@@ -461,7 +457,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print(f"Applied {strategy}")
 
         # Boost very rare classes (< 1% of max class)
-        rare_threshold = max_count * 0.01
+        rare_threshold = max_count * 0.05
         for i, count in enumerate(counts):
             if count < rare_threshold:
                 aggressive_weights[i] *= 4.0  # 4x boost for very rare classes
@@ -608,9 +604,9 @@ class AdaptiveYOLOv12DetectionTrainer:
                                     weight=weighted_tensor, reduction="none"
                                 )(cls_preds, cls_targets)
 
-                                # Focal loss with alpha=3 for recall boost
+                                # Focal loss with alpha=4 for recall boost
                                 pt = torch.exp(-ce_loss)
-                                focal_loss = (1 - pt) ** 3 * ce_loss
+                                focal_loss = (1 - pt) ** 4 * ce_loss
 
                                 loss_dict["cls"] = focal_loss.mean()
 
@@ -645,13 +641,13 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         if unfreeze_schedule is None:
             # Detection-optimized unfreezing schedule
-            unfreeze_schedule = {
-                0: 0.20,  # Detection heads - 25 épocas
-                25: 0.40,  # + Neck PAN - 25 épocas
-                50: 0.60,  # + Neck FPN - 30 épocas
-                80: 0.75,  # + Late Backbone - 30 épocas
-                110: 0.90,  # + Mid Backbone - 35 épocas
-                145: 1.0,  # Full model - 15 épocas
+            {
+                0: 0.20,  # Detection heads only (0-30 epochs)
+                30: 0.40,  # + Neck PAN (30-60 epochs)
+                60: 0.60,  # + Neck FPN (60-100 epochs)
+                100: 0.75,  # + Late backbone (100-140 epochs)
+                140: 0.90,  # + Mid backbone (140-180 epochs)
+                180: 1.0,  # Full model (180-210 epochs)
             }
 
         print("Setting up YOLO detection progressive unfreezing...")
@@ -840,7 +836,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         return False
 
     def train_detection_model_with_progressive_unfreezing(
-        self, config_path, epochs=160, unfreeze_schedule=None
+        self, config_path, epochs=210, unfreeze_schedule=None
     ):
         """
         Train YOLO detection model with progressive unfreezing and aggressive class weights.
@@ -890,21 +886,21 @@ class AdaptiveYOLOv12DetectionTrainer:
             "project": self.save_dir,
             "exist_ok": True,
             "pretrained": True,
-            "optimizer": "AdamW",
-            "lr0": 0.0008,
-            "lrf": 0.001,
-            "momentum": 0.9,
+            "optimizer": "SGD",
+            "lr0": 0.005,
+            "lrf": 0.0001,
+            "momentum": 0.95,
             "weight_decay": 0.0005,
-            "warmup_epochs": 6,
+            "warmup_epochs": 8,
             "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
             "dropout": 0.1,
+            "label_smoothing": 0.05,
             "conf": self.default_conf,
             "iou": 0.5,  # Detection-specific
             "close_mosaic": 10,
-            "max_det": 350,  # Maximum detections per image
         }
 
         # Phase-based training
@@ -949,11 +945,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             # Configure training for this phase
             phase_training_args = base_training_args.copy()
             phase_training_args.update(
-                {
-                    "epochs": phase_epochs,
-                    "name": f"detection_phase_{i+1}",
-                    "conf": 0.50,
-                }
+                {"epochs": phase_epochs, "name": f"detection_phase_{i+1}", "conf": 0.3}
             )
 
             # Execute training
@@ -1058,7 +1050,7 @@ class AdaptiveYOLOv12DetectionTrainer:
                 print(f"\nValidating Phase {phase_num} - best.pt...")
                 try:
                     model = YOLO(best_path)
-                    results = model.val(data=config_path, conf=0.25, iou=0.7, verbose=False)
+                    results = model.val(data=config_path, conf=0.3, iou=0.5, verbose=False)
 
                     result_data = {
                         "phase": phase_num,
@@ -1088,7 +1080,7 @@ class AdaptiveYOLOv12DetectionTrainer:
                 print(f"Validating Phase {phase_num} - last.pt...")
                 try:
                     model = YOLO(last_path)
-                    results = model.val(data=config_path, conf=0.25, iou=0.7, verbose=False)
+                    results = model.val(data=config_path, conf=0.3, iou=0.5, verbose=False)
 
                     result_data = {
                         "phase": phase_num,
@@ -1216,6 +1208,301 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return class_results
 
+    def aggressive_minority_oversampling(
+        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+    ):
+        """
+        Aggressive oversampling of minority classes with strong augmentations.
+
+        Args:
+            dataset_dir (str): Path to cleaned detection dataset
+            target_samples_per_class (int): Target number of samples for minority classes
+            minority_threshold (int): Classes below this are considered minority
+
+        Returns:
+            str: Path to oversampled dataset
+        """
+        print("\n" + "=" * 70)
+        print("AGGRESSIVE MINORITY CLASS OVERSAMPLING")
+        print("=" * 70)
+
+        # Analyze current class distribution
+        train_images_dir = os.path.join(dataset_dir, "images", "train")
+        train_labels_dir = os.path.join(dataset_dir, "labels", "train")
+
+        # Count samples per class
+        class_samples = {name: 0 for name in self.class_names}
+        images_by_class = {name: [] for name in self.class_names}
+
+        for img_file in os.listdir(train_images_dir):
+            if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+
+            label_file = os.path.splitext(img_file)[0] + ".txt"
+            label_path = os.path.join(train_labels_dir, label_file)
+
+            if os.path.exists(label_path):
+                with open(label_path, "r") as f:
+                    lines = f.readlines()
+
+                # Track which classes are in this image
+                classes_in_image = set()
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        class_id = int(parts[0])
+                        if class_id < len(self.class_names):
+                            class_name = self.class_names[class_id]
+                            class_samples[class_name] += 1
+                            classes_in_image.add(class_name)
+
+                # Add image to all classes it contains
+                for class_name in classes_in_image:
+                    images_by_class[class_name].append(img_file)
+
+        # Display current distribution
+        print("\nCurrent class distribution:")
+        print(f"{'Class':<20} {'Samples':<10} {'Images':<10} {'Status':<15}")
+        print("-" * 70)
+
+        minority_classes = []
+        for class_name in self.class_names:
+            samples = class_samples[class_name]
+            images = len(images_by_class[class_name])
+            status = "MINORITY" if samples < minority_threshold else "OK"
+
+            print(f"{class_name:<20} {samples:<10} {images:<10} {status:<15}")
+
+            if samples < minority_threshold and samples > 0:
+                minority_classes.append(class_name)
+
+        if not minority_classes:
+            print("\nNo minority classes found. Skipping oversampling.")
+            return dataset_dir
+
+        print(f"\nMinority classes to oversample: {minority_classes}")
+
+        # Calculate replication factors
+        replication_plan = {}
+        for class_name in minority_classes:
+            current_samples = class_samples[class_name]
+            target = min(target_samples_per_class, current_samples * 10)  # Cap at 10x
+            replication_factor = max(2, int(target / current_samples))
+            replication_plan[class_name] = {
+                "current": current_samples,
+                "target": target,
+                "factor": replication_factor,
+                "images": images_by_class[class_name],
+            }
+
+        print("\nOversampling plan:")
+        for class_name, plan in replication_plan.items():
+            print(
+                f"  {class_name}: {plan['current']} → ~{plan['target']} "
+                f"({plan['factor']}x, {len(plan['images'])} images)"
+            )
+
+        # Create oversampled dataset
+        oversampled_dir = dataset_dir + "_oversampled"
+        if os.path.exists(oversampled_dir):
+            print(f"\nRemoving existing oversampled directory: {oversampled_dir}")
+            shutil.rmtree(oversampled_dir)
+
+        # Copy original dataset structure
+        print("\nCopying original dataset...")
+        shutil.copytree(dataset_dir, oversampled_dir)
+
+        oversampled_images_dir = os.path.join(oversampled_dir, "images", "train")
+        oversampled_labels_dir = os.path.join(oversampled_dir, "labels", "train")
+
+        # Apply oversampling with augmentations
+        print("\nApplying oversampling with strong augmentations...")
+
+        total_augmented = 0
+        for class_name, plan in replication_plan.items():
+            print(f"\nProcessing {class_name}...")
+            class_augmented = 0
+
+            for img_file in plan["images"]:
+                img_path = os.path.join(train_images_dir, img_file)
+                label_file = os.path.splitext(img_file)[0] + ".txt"
+                label_path = os.path.join(train_labels_dir, label_file)
+
+                # Create (factor - 1) augmented versions (original already copied)
+                for aug_idx in range(plan["factor"] - 1):
+                    try:
+                        # Apply strong augmentation
+                        aug_img, aug_labels = self._apply_strong_augmentation(img_path, label_path)
+
+                        # Save augmented image
+                        base_name = os.path.splitext(img_file)[0]
+                        aug_img_name = f"{base_name}_aug_{class_name}_{aug_idx}.jpg"
+                        aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
+
+                        cv2.imwrite(aug_img_path, aug_img)
+
+                        # Save augmented labels
+                        aug_label_name = f"{base_name}_aug_{class_name}_{aug_idx}.txt"
+                        aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
+
+                        with open(aug_label_path, "w") as f:
+                            f.writelines(aug_labels)
+
+                        class_augmented += 1
+                        total_augmented += 1
+
+                    except Exception as e:
+                        print(f"  Warning: Failed to augment {img_file}: {e}")
+                        continue
+
+            print(f"  Created {class_augmented} augmented images for {class_name}")
+
+        print(f"\nOversampling complete!")
+        print(f"   Total augmented images: {total_augmented}")
+        print(f"   Oversampled dataset: {oversampled_dir}")
+
+        # Update dataset config
+        config_path = os.path.join(oversampled_dir, "data.yaml")
+        config = {
+            "path": os.path.abspath(oversampled_dir),
+            "train": "images/train",
+            "val": "images/val",
+            "nc": len(self.class_names),
+            "names": self.class_names,
+        }
+
+        with open(config_path, "w") as f:
+            yaml.safe_dump(config, f, default_flow_style=False)
+
+        print(f"   Updated config: {config_path}")
+
+        # Generate oversampling report
+        self._generate_oversampling_report(
+            dataset_dir, oversampled_dir, replication_plan, total_augmented
+        )
+
+        return oversampled_dir
+
+    def _apply_strong_augmentation(self, img_path, label_path):
+        """
+        Apply strong augmentations including flips and rotations.
+
+        Args:
+            img_path (str): Path to original image
+            label_path (str): Path to original label file
+
+        Returns:
+            tuple: (augmented_image, augmented_labels)
+        """
+        # Read image
+        img = cv2.imread(img_path)
+        if img is None:
+            raise ValueError(f"Could not read image: {img_path}")
+
+        h, w = img.shape[:2]
+
+        # Read labels
+        with open(label_path, "r") as f:
+            labels = f.readlines()
+
+        # Parse labels
+        boxes = []
+        for line in labels:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                class_id = int(parts[0])
+                cx, cy, bw, bh = map(float, parts[1:5])
+                boxes.append([class_id, cx, cy, bw, bh])
+
+        # Randomly select augmentation
+        aug_type = np.random.choice(
+            ["horizontal_flip", "vertical_flip", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
+        )
+
+        # Apply augmentation
+        if aug_type == "horizontal_flip":
+            img = cv2.flip(img, 1)
+            boxes = [[cls_id, 1.0 - cx, cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "vertical_flip":
+            img = cv2.flip(img, 0)
+            boxes = [[cls_id, cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_90_cw":
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            # Transform: (cx, cy) -> (cy, 1-cx), swap w and h
+            boxes = [[cls_id, cy, 1.0 - cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_90_ccw":
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            # Transform: (cx, cy) -> (1-cy, cx), swap w and h
+            boxes = [[cls_id, 1.0 - cy, cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_180":
+            img = cv2.rotate(img, cv2.ROTATE_180)
+            # Transform: (cx, cy) -> (1-cx, 1-cy)
+            boxes = [[cls_id, 1.0 - cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        # Convert boxes back to label format
+        aug_labels = []
+        for cls_id, cx, cy, bw, bh in boxes:
+            # Clip coordinates to valid range
+            cx = np.clip(cx, 0.0, 1.0)
+            cy = np.clip(cy, 0.0, 1.0)
+            bw = np.clip(bw, 0.0, 1.0)
+            bh = np.clip(bh, 0.0, 1.0)
+
+            aug_labels.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+
+        return img, aug_labels
+
+    def _generate_oversampling_report(
+        self, original_dir, oversampled_dir, replication_plan, total_augmented
+    ):
+        """
+        Generate comprehensive oversampling report.
+
+        Args:
+            original_dir (str): Original dataset directory
+            oversampled_dir (str): Oversampled dataset directory
+            replication_plan (dict): Replication plan details
+            total_augmented (int): Total number of augmented images
+        """
+        report_path = os.path.join(self.save_dir, "oversampling_report.txt")
+
+        with open(report_path, "w") as f:
+            f.write("=" * 70 + "\n")
+            f.write("OVERSAMPLING REPORT\n")
+            f.write("=" * 70 + "\n\n")
+
+            f.write(f"Original dataset: {original_dir}\n")
+            f.write(f"Oversampled dataset: {oversampled_dir}\n")
+            f.write(f"Total augmented images: {total_augmented}\n\n")
+
+            f.write("Replication plan:\n")
+            f.write("-" * 70 + "\n")
+            f.write(
+                f"{'Class':<20} {'Original':<12} {'Target':<12} {'Factor':<10} {'Images':<10}\n"
+            )
+            f.write("-" * 70 + "\n")
+
+            for class_name, plan in replication_plan.items():
+                f.write(
+                    f"{class_name:<20} {plan['current']:<12} {plan['target']:<12} "
+                    f"{plan['factor']:<10} {len(plan['images']):<10}\n"
+                )
+
+            f.write("\n" + "=" * 70 + "\n")
+            f.write("Augmentation types applied:\n")
+            f.write("  - Horizontal flip\n")
+            f.write("  - Vertical flip\n")
+            f.write("  - 90 degree clockwise rotation\n")
+            f.write("  - 90 degree counter-clockwise rotation\n")
+            f.write("  - 180 degree rotation (upside down)\n")
+            f.write("=" * 70 + "\n")
+
+        print(f"\nOversampling report saved: {report_path}")
+
     def validate_detection_model(self, config_path):
         """Validate the trained detection model."""
         if self.model is None:
@@ -1274,10 +1561,10 @@ class AdaptiveYOLOv12DetectionTrainer:
 
 
 # Main training function for detection
-# Main training function for detection
 def main_detection_training():
     """
-    Main detection training pipeline with aggressive class weighting and progressive unfreezing.
+    Main detection training pipeline with aggressive class weighting, progressive unfreezing,
+    and minority class oversampling.
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
@@ -1290,25 +1577,37 @@ def main_detection_training():
         print("\nStep 2: Preparing detection dataset...")
         config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.0, val_split=0.2)
 
-        print("\nStep 3: Initializing YOLO detection model...")
+        # Extract the dataset directory from config path
+        prepared_dataset_dir = os.path.dirname(config_path)
+
+        print("\nStep 3: Applying aggressive minority oversampling...")
+        oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
+            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+        )
+
+        # Update config path to point to oversampled dataset
+        config_path = os.path.join(oversampled_dataset_dir, "data.yaml")
+        print(f"Using oversampled dataset config: {config_path}")
+
+        print("\nStep 4: Initializing YOLO detection model...")
         if not trainer.initialize_yolo_detection_model():
             raise RuntimeError("Failed to initialize detection model")
 
-        print("\nStep 4: Training with progressive unfreezing...")
+        print("\nStep 5: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads - 25 épocas
-            25: 0.40,  # + Neck PAN - 25 épocas
-            50: 0.60,  # + Neck FPN - 30 épocas
-            80: 0.75,  # + Late Backbone - 30 épocas
-            110: 0.90,  # + Mid Backbone - 35 épocas
-            145: 1.0,  # Full model - 15 épocas
+            0: 0.20,  # Detection heads only (0-30 epochs)
+            30: 0.40,  # + Neck PAN (30-60 epochs)
+            60: 0.60,  # + Neck FPN (60-100 epochs)
+            100: 0.75,  # + Late backbone (100-140 epochs)
+            140: 0.90,  # + Mid backbone (140-180 epochs)
+            180: 1.0,  # Full model (180-210 epochs)
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=160, unfreeze_schedule=custom_schedule
+            config_path, epochs=210, unfreeze_schedule=custom_schedule
         )
 
-        print("\nStep 5: Comprehensive validation of all checkpoints...")
+        print("\nStep 6: Comprehensive validation of all checkpoints...")
         validation_results = trainer.validate_all_checkpoints(config_path)
 
         if validation_results:
@@ -1323,10 +1622,11 @@ def main_detection_training():
         print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
         print("=" * 60)
         print("Features implemented:")
-        print("  ✓ Pure YOLO detection (no classification confusion)")
-        print("  ✓ Aggressive class weighting for imbalanced datasets")
-        print("  ✓ Detection-optimized progressive unfreezing")
-        print("  ✓ Proper YOLO architecture understanding")
+        print("  - Pure YOLO detection (no classification confusion)")
+        print("  - Aggressive class weighting for imbalanced datasets")
+        print("  - Minority class oversampling with strong augmentations")
+        print("  - Detection-optimized progressive unfreezing")
+        print("  - Proper YOLO architecture understanding")
         print("=" * 60)
 
         return trainer
