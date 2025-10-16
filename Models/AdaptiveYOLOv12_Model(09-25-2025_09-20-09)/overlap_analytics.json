@@ -1,0 +1,811 @@
+{
+  "strategy_usage": {
+    "merge": 714,
+    "nms": 149,
+    "keep_largest": 3
+  },
+  "total_overlap_situations": 866,
+  "overlap_patterns": [
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.17680727422741666,
+      "avg_size_disparity": 1.0254962125238711,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.31440612061699713,
+      "avg_size_disparity": 1.563408001834254,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.5,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 9,
+      "same_class_overlaps": 9,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12682857822855378,
+      "avg_size_disparity": 1.010290887132981,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 7,
+      "same_class_overlaps": 7,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11261013336240171,
+      "avg_size_disparity": 1.0663183918117425,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1633393829401087,
+      "avg_size_disparity": 6.122175784385169,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.30000000000000004,
+        "keep_largest": 0.6000000000000001,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 7,
+      "same_class_overlaps": 6,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.16046995554351623,
+      "avg_size_disparity": 0.9999937526717767,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.8571428571428571,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 5,
+      "same_class_overlaps": 5,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.19590993257382341,
+      "avg_size_disparity": 1.110517470097596,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 4,
+      "same_class_overlaps": 4,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.19053615048608308,
+      "avg_size_disparity": 1.0543942269755555,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.10559998471559107,
+      "avg_size_disparity": 1.0383427494403163,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12129515413397365,
+      "avg_size_disparity": 0.9999974155446981,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.15194825210214408,
+      "avg_size_disparity": 1.309776844594423,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 9,
+      "same_class_overlaps": 8,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1347323456898637,
+      "avg_size_disparity": 1.9673477392123908,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.8888888888888888,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 23,
+      "same_class_overlaps": 22,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1639598771357091,
+      "avg_size_disparity": 1.0671478665870207,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.9565217391304348,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1384362178077705,
+      "avg_size_disparity": 3.5074718444810316,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.5,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.30000000000000004,
+        "keep_largest": 0.6000000000000001,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 8,
+      "same_class_overlaps": 6,
+      "different_class_overlaps": 2,
+      "avg_iou": 0.12522971943906586,
+      "avg_size_disparity": 1.044168498343544,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.75,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 5,
+      "same_class_overlaps": 5,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.10453498360277033,
+      "avg_size_disparity": 0.999992919669838,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.10613503056795409,
+      "avg_size_disparity": 1.0265433501700498,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 7,
+      "same_class_overlaps": 7,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12747813683763534,
+      "avg_size_disparity": 1.0961437968446675,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 2,
+      "avg_iou": 0.1123016400966734,
+      "avg_size_disparity": 2.696559684243452,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.30000000000000004,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1258476825745617,
+      "avg_size_disparity": 3.005696272418152,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.30000000000000004,
+        "keep_largest": 0.6000000000000001,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11805000173858657,
+      "avg_size_disparity": 0.9999955778725663,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12949833016719933,
+      "avg_size_disparity": 0.9999933772114424,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 3,
+      "same_class_overlaps": 3,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.10888455919375715,
+      "avg_size_disparity": 2.846738807782497,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.6,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 33,
+      "same_class_overlaps": 33,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11525856338435318,
+      "avg_size_disparity": 1.0064431646806549,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 11,
+      "same_class_overlaps": 11,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.1256363453311453,
+      "avg_size_disparity": 1.0560184568266884,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 14,
+      "same_class_overlaps": 13,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.16665756667749493,
+      "avg_size_disparity": 1.1250116189735075,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.9285714285714286,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1457855519915488,
+      "avg_size_disparity": 1.1481993792960767,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 12,
+      "same_class_overlaps": 11,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.12126335308170101,
+      "avg_size_disparity": 1.0668193146980152,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.9166666666666666,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.10643655489472806,
+      "avg_size_disparity": 1.0291442594039297,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 62,
+      "same_class_overlaps": 62,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12279670892293117,
+      "avg_size_disparity": 1.0463155538497657,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 5,
+      "same_class_overlaps": 5,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11549909586606391,
+      "avg_size_disparity": 0.999996171344051,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.13704230319319904,
+      "avg_size_disparity": 0.9999909001041687,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 9,
+      "same_class_overlaps": 9,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.1191460100086693,
+      "avg_size_disparity": 0.999999127034265,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.14334616270886635,
+      "avg_size_disparity": 1.0136481418678835,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 13,
+      "same_class_overlaps": 13,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12455714343849503,
+      "avg_size_disparity": 1.0989413103937251,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 5,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 4,
+      "avg_iou": 0.3522200691173972,
+      "avg_size_disparity": 1.8671835186722494,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.2,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 3,
+      "same_class_overlaps": 3,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12691195792466636,
+      "avg_size_disparity": 1.0712116229601443,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 10,
+      "same_class_overlaps": 10,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.13302444010661196,
+      "avg_size_disparity": 1.0294416561435367,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11058914295617446,
+      "avg_size_disparity": 0.999995338308435,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 3,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.1289363940384118,
+      "avg_size_disparity": 1.4136824140274598,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.6666666666666666,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.5,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 6,
+      "same_class_overlaps": 6,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.10697738677559347,
+      "avg_size_disparity": 0.9999982353310221,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 13,
+      "same_class_overlaps": 13,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.12336195688126682,
+      "avg_size_disparity": 1.0895944157460746,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 20,
+      "same_class_overlaps": 20,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.17815661638311536,
+      "avg_size_disparity": 1.0077674252795887,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 9,
+      "same_class_overlaps": 9,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.120776587604978,
+      "avg_size_disparity": 1.0104975797990747,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 0,
+      "different_class_overlaps": 1,
+      "avg_iou": 0.10690561412172693,
+      "avg_size_disparity": 1.6847242368679483,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 0.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.8,
+        "merge": 0.5,
+        "keep_largest": 0.2,
+        "keep_highest_conf": 0.45
+      }
+    },
+    {
+      "total_overlaps": 9,
+      "same_class_overlaps": 9,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.11397827563442456,
+      "avg_size_disparity": 1.0908442701499483,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 2,
+      "same_class_overlaps": 2,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.3602507211429017,
+      "avg_size_disparity": 1.0537068836266643,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 6,
+      "same_class_overlaps": 6,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.1305438045503254,
+      "avg_size_disparity": 1.105222491901454,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 4,
+      "same_class_overlaps": 4,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.1040687580278748,
+      "avg_size_disparity": 1.0783213697737062,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    },
+    {
+      "total_overlaps": 1,
+      "same_class_overlaps": 1,
+      "different_class_overlaps": 0,
+      "avg_iou": 0.21663701826232903,
+      "avg_size_disparity": 0.9999924991926359,
+      "avg_confidence_disparity": 0.0,
+      "same_class_ratio": 1.0,
+      "high_iou_ratio": 0.0,
+      "strategy_scores": {
+        "nms": 0.5,
+        "merge": 0.7999999999999999,
+        "keep_largest": 0.4,
+        "keep_highest_conf": 0.25
+      }
+    }
+  ],
+  "analysis_timestamp": "2025-09-26T04:49:11.981501"
+}

@@ -60,11 +60,11 @@ def count_names(class_ids: list[str]):
     return dict(name_counts)
 
 
-def predict_model(model: YOLO, image_path: str, conf: float = 0.4) -> list[Results]:
+def predict_model(model: YOLO, image_path: str, conf: float = 0.3) -> list[Results]:
     return model.predict(  # type: ignore
         source=image_path,
-        # conf=conf,
-        # iou=iou_treshold,
+        conf=conf,
+        iou=0.5,
     )
 
 
@@ -174,7 +174,7 @@ def paint_predictions(results: list[Results], image_path: str):
             start_point = (int(box[0].item()), int(box[1].item()))
             end_point = (int(box[2].item()), int(box[3].item()))
             color = CLASS_COLORS.get(class_ids_global[i], (0, 0, 255))
-            box_thickness = 3
+            box_thickness = 1
             cv2.rectangle(image_temp, start_point, end_point, color, box_thickness)
             text_conf = str(confidences_global[i])
             font = cv2.FONT_HERSHEY_DUPLEX
@@ -207,10 +207,12 @@ def paint_predictions(results: list[Results], image_path: str):
 
 if __name__ == "__main__":
 
-    model_name = "YOLOv12_Detection_10-01-2025_09-25-25"
-    phase_folder = "detection_phase_6"
-    image_file = "0sfz9173.png"
-    conf = 0.1
+    model_name = "AdaptiveYOLOv12_Model(09-25-2025_09-20-09)"
+    phase_folder = "detection_phase_9"
+    image_file = (
+        "C:/Users/rsara/Downloads/4g5n6h37-planskiss_png.rf.37520ae43bae65c567f9667838ba461a.jpg"
+    )
+    conf = 0.3
 
     model = load_model(model_name=model_name, phase_folder=phase_folder)
 
