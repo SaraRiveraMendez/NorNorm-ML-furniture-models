@@ -1209,7 +1209,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         return class_results
 
     def aggressive_minority_oversampling(
-        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2000
+        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
     ):
         """
         Aggressive oversampling of minority classes with strong augmentations.
@@ -1582,7 +1582,7 @@ def main_detection_training():
 
         print("\nStep 3: Applying aggressive minority oversampling...")
         oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
-            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2000
+            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2500
         )
 
         # Update config path to point to oversampled dataset
