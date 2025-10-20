@@ -26,7 +26,7 @@ class AdaptiveYOLOv12DetectionTrainer:
     Focuses purely on object detection with proper YOLO architecture understanding.
     """
 
-    def __init__(self, model_size="s", img_size=640, batch_size=10, default_conf=0.30):
+    def __init__(self, model_size="s", img_size=640, batch_size=16, default_conf=0.30):
         """
         Initialize the YOLOv12 Detection Trainer.
 
@@ -433,20 +433,20 @@ class AdaptiveYOLOv12DetectionTrainer:
         if imbalance_ratio > 40:
             # Logarithmic weighting for extreme cases
             log_weights = np.log(max_count + 1) / np.log(counts + 1)
-            aggressive_weights = log_weights * 3.0  # High amplification
-            strategy = "logarithmic extreme (3x amplified)"
+            aggressive_weights = log_weights * 2.0  # High amplification
+            strategy = "logarithmic extreme (2x amplified)"
 
         elif imbalance_ratio > 20:
             # Power weighting for severe cases
             power_weights = np.power(max_count / counts, 0.75)
-            aggressive_weights = power_weights * 2.0
-            strategy = "power weighting (0.75 exp, 2x amplified)"
+            aggressive_weights = power_weights * 1.5
+            strategy = "power weighting (0.75 exp, 1.5x amplified)"
 
         elif imbalance_ratio > 10:
             # Enhanced square root for high imbalance
             sqrt_weights = np.sqrt(max_count / counts)
-            aggressive_weights = sqrt_weights * 2.5
-            strategy = "enhanced sqrt (2.5x amplified)"
+            aggressive_weights = sqrt_weights * 1.5
+            strategy = "enhanced sqrt (1.5x amplified)"
 
         else:
             # Amplified linear for moderate imbalance
@@ -460,14 +460,14 @@ class AdaptiveYOLOv12DetectionTrainer:
         rare_threshold = max_count * 0.05
         for i, count in enumerate(counts):
             if count < rare_threshold:
-                aggressive_weights[i] *= 4.0  # 4x boost for very rare classes
+                aggressive_weights[i] *= 3.0  # 3x boost for very rare classes
                 print(
                     f"Rare class boost applied: {list(valid_classes.keys())[i]} "
                     f"({count} samples)"
                 )
 
         # Clip to reasonable range for detection (higher than classification)
-        aggressive_weights = np.clip(aggressive_weights, 0.1, 100.0)
+        aggressive_weights = np.clip(aggressive_weights, 0.1, 50.0)
 
         # Optional smoothing for extreme variance
         weight_std = np.std(aggressive_weights)
@@ -604,9 +604,9 @@ class AdaptiveYOLOv12DetectionTrainer:
                                     weight=weighted_tensor, reduction="none"
                                 )(cls_preds, cls_targets)
 
-                                # Focal loss with alpha=4 for recall boost
+                                # Focal loss with alpha=2 for recall boost
                                 pt = torch.exp(-ce_loss)
-                                focal_loss = (1 - pt) ** 4 * ce_loss
+                                focal_loss = (1 - pt) ** 2 * ce_loss
 
                                 loss_dict["cls"] = focal_loss.mean()
 
@@ -642,12 +642,12 @@ class AdaptiveYOLOv12DetectionTrainer:
         if unfreeze_schedule is None:
             # Detection-optimized unfreezing schedule
             {
-                0: 0.20,  # Detection heads only (0-30 epochs)
-                30: 0.40,  # + Neck PAN (30-60 epochs)
-                60: 0.60,  # + Neck FPN (60-100 epochs)
-                100: 0.75,  # + Late backbone (100-140 epochs)
-                140: 0.90,  # + Mid backbone (140-180 epochs)
-                180: 1.0,  # Full model (180-210 epochs)
+                0: 0.20,  # Detection heads (0-40)
+                40: 0.40,  # + Neck PAN (40-80)
+                80: 0.60,  # + Neck FPN (80-120)
+                120: 0.75,  # + Late backbone (120-160)
+                160: 0.90,  # + Mid backbone (160-200)
+                200: 1.0,  # Full model (200-210)
             }
 
         print("Setting up YOLO detection progressive unfreezing...")
@@ -888,16 +888,16 @@ class AdaptiveYOLOv12DetectionTrainer:
             "pretrained": True,
             "optimizer": "SGD",
             "lr0": 0.005,
-            "lrf": 0.0001,
-            "momentum": 0.95,
-            "weight_decay": 0.0005,
+            "lrf": 0.01,
+            "momentum": 0.937,
+            "weight_decay": 0.001,
             "warmup_epochs": 8,
             "warmup_momentum": 0.85,
             "warmup_bias_lr": 0.1,
             "cos_lr": True,
             "verbose": True,
-            "dropout": 0.1,
-            "label_smoothing": 0.05,
+            "dropout": 0.2,
+            "label_smoothing": 0.1,
             "conf": self.default_conf,
             "iou": 0.5,  # Detection-specific
             "close_mosaic": 10,
@@ -1209,7 +1209,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         return class_results
 
     def aggressive_minority_oversampling(
-        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2000
     ):
         """
         Aggressive oversampling of minority classes with strong augmentations.
@@ -1568,7 +1568,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=16)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
@@ -1582,7 +1582,7 @@ def main_detection_training():
 
         print("\nStep 3: Applying aggressive minority oversampling...")
         oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
-            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2000
         )
 
         # Update config path to point to oversampled dataset
@@ -1595,12 +1595,12 @@ def main_detection_training():
 
         print("\nStep 5: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads only (0-30 epochs)
-            30: 0.40,  # + Neck PAN (30-60 epochs)
-            60: 0.60,  # + Neck FPN (60-100 epochs)
-            100: 0.75,  # + Late backbone (100-140 epochs)
-            140: 0.90,  # + Mid backbone (140-180 epochs)
-            180: 1.0,  # Full model (180-210 epochs)
+            0: 0.20,  # Detection heads (0-40)
+            40: 0.40,  # + Neck PAN (40-80)
+            80: 0.60,  # + Neck FPN (80-120)
+            120: 0.75,  # + Late backbone (120-160)
+            160: 0.90,  # + Mid backbone (160-200)
+            200: 1.0,  # Full model (200-210)
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
