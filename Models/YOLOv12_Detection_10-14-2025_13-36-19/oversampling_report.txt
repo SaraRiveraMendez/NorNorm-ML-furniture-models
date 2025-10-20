@@ -1,0 +1,25 @@
+======================================================================
+OVERSAMPLING REPORT
+======================================================================
+
+Original dataset: yolo_detection_dataset
+Oversampled dataset: yolo_detection_dataset_oversampled
+Total augmented images: 2479
+
+Replication plan:
+----------------------------------------------------------------------
+Class                Original     Target       Factor     Images    
+----------------------------------------------------------------------
+LOUNGE               1795         5000         2          639       
+PHONEBOOTH           1121         5000         4          265       
+REST-FOR-2           2042         5000         2          524       
+ROUND-TABLE          2218         5000         2          521       
+
+======================================================================
+Augmentation types applied:
+  - Horizontal flip
+  - Vertical flip
+  - 90 degree clockwise rotation
+  - 90 degree counter-clockwise rotation
+  - 180 degree rotation (upside down)
+======================================================================
