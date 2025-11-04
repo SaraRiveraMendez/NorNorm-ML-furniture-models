@@ -1519,137 +1519,703 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return oversampled_dir
 
+    def _generate_selective_oversampling_report(
+        self, original_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
+    ):
+        """
+        Generate comprehensive report for selective oversampling.
+        """
+        report_path = os.path.join(self.save_dir, "selective_oversampling_report.txt")
 
-def _generate_selective_oversampling_report(
-    self, original_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
-):
-    """
-    Generate comprehensive report for selective oversampling.
-    """
-    report_path = os.path.join(self.save_dir, "selective_oversampling_report.txt")
+        with open(report_path, "w") as f:
+            f.write("=" * 70 + "\n")
+            f.write("SELECTIVE OVERSAMPLING REPORT\n")
+            f.write("=" * 70 + "\n\n")
 
-    with open(report_path, "w") as f:
-        f.write("=" * 70 + "\n")
-        f.write("SELECTIVE OVERSAMPLING REPORT\n")
-        f.write("=" * 70 + "\n\n")
+            f.write(f"Original dataset: {original_dir}\n")
+            f.write(f"Oversampled dataset: {oversampled_dir}\n")
+            f.write(f"Total augmented images: {total_augmented}\n\n")
 
-        f.write(f"Original dataset: {original_dir}\n")
-        f.write(f"Oversampled dataset: {oversampled_dir}\n")
-        f.write(f"Total augmented images: {total_augmented}\n\n")
+            f.write("Strategy: Selective minority oversampling\n")
+            f.write("  - Pure minority images: High replication factor\n")
+            f.write("  - Mixed images: Lower replication factor (conservative)\n\n")
 
-        f.write("Strategy: Selective minority oversampling\n")
-        f.write("  - Pure minority images: High replication factor\n")
-        f.write("  - Mixed images: Lower replication factor (conservative)\n\n")
-
-        f.write("Replication details:\n")
-        f.write("-" * 70 + "\n")
-        f.write(
-            f"{'Class':<15} {'Current':<10} {'Target':<10} {'Pure Imgs':<12} "
-            f"{'Mixed Imgs':<12} {'Strategy':<15}\n"
-        )
-        f.write("-" * 70 + "\n")
-
-        for class_name, plan in replication_plan.items():
+            f.write("Replication details:\n")
+            f.write("-" * 70 + "\n")
             f.write(
-                f"{class_name:<15} {plan['current_samples']:<10} "
-                f"{plan['target_samples']:<10} "
-                f"{len(plan['pure_images'])}x{plan['pure_factor']:<8} "
-                f"{len(plan['mixed_images'])}x{plan['mixed_factor']:<8} "
-                f"{plan['strategy']:<15}\n"
+                f"{'Class':<15} {'Current':<10} {'Target':<10} {'Pure Imgs':<12} "
+                f"{'Mixed Imgs':<12} {'Strategy':<15}\n"
+            )
+            f.write("-" * 70 + "\n")
+
+            for class_name, plan in replication_plan.items():
+                f.write(
+                    f"{class_name:<15} {plan['current_samples']:<10} "
+                    f"{plan['target_samples']:<10} "
+                    f"{len(plan['pure_images'])}x{plan['pure_factor']:<8} "
+                    f"{len(plan['mixed_images'])}x{plan['mixed_factor']:<8} "
+                    f"{plan['strategy']:<15}\n"
+                )
+
+            f.write("\nAugmentation statistics:\n")
+            f.write("-" * 70 + "\n")
+            f.write(f"{'Class':<15} {'Pure Augs':<12} {'Mixed Augs':<12} {'Total':<10}\n")
+            f.write("-" * 70 + "\n")
+
+            for class_name, stats in augmentation_stats.items():
+                total = stats["pure"] + stats["mixed"]
+                f.write(f"{class_name:<15} {stats['pure']:<12} {stats['mixed']:<12} {total:<10}\n")
+
+            f.write("\n" + "=" * 70 + "\n")
+            f.write("Augmentation types applied:\n")
+            f.write("  - Horizontal flip\n")
+            f.write("  - Vertical flip\n")
+            f.write("  - 90 degree clockwise rotation\n")
+            f.write("  - 90 degree counter-clockwise rotation\n")
+            f.write("  - 180 degree rotation (upside down)\n")
+            f.write("=" * 70 + "\n")
+
+        print(f"Detailed report saved: {report_path}")
+
+        def _apply_strong_augmentation(self, img_path, label_path):
+            """
+            Apply strong augmentations including flips and rotations.
+
+            Args:
+                img_path (str): Path to original image
+                label_path (str): Path to original label file
+
+            Returns:
+                tuple: (augmented_image, augmented_labels)
+            """
+            # Read image
+            img = cv2.imread(img_path)
+            if img is None:
+                raise ValueError(f"Could not read image: {img_path}")
+
+            h, w = img.shape[:2]
+
+            # Read labels
+            with open(label_path, "r") as f:
+                labels = f.readlines()
+
+            # Parse labels
+            boxes = []
+            for line in labels:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    class_id = int(parts[0])
+                    cx, cy, bw, bh = map(float, parts[1:5])
+                    boxes.append([class_id, cx, cy, bw, bh])
+
+            # Randomly select augmentation
+            aug_type = np.random.choice(
+                ["horizontal_flip", "vertical_flip", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
             )
 
-        f.write("\nAugmentation statistics:\n")
-        f.write("-" * 70 + "\n")
-        f.write(f"{'Class':<15} {'Pure Augs':<12} {'Mixed Augs':<12} {'Total':<10}\n")
-        f.write("-" * 70 + "\n")
+            # Apply augmentation
+            if aug_type == "horizontal_flip":
+                img = cv2.flip(img, 1)
+                boxes = [[cls_id, 1.0 - cx, cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
 
-        for class_name, stats in augmentation_stats.items():
-            total = stats["pure"] + stats["mixed"]
-            f.write(f"{class_name:<15} {stats['pure']:<12} {stats['mixed']:<12} {total:<10}\n")
+            elif aug_type == "vertical_flip":
+                img = cv2.flip(img, 0)
+                boxes = [[cls_id, cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
 
-        f.write("\n" + "=" * 70 + "\n")
-        f.write("Augmentation types applied:\n")
-        f.write("  - Horizontal flip\n")
-        f.write("  - Vertical flip\n")
-        f.write("  - 90 degree clockwise rotation\n")
-        f.write("  - 90 degree counter-clockwise rotation\n")
-        f.write("  - 180 degree rotation (upside down)\n")
-        f.write("=" * 70 + "\n")
+            elif aug_type == "rotate_90_cw":
+                img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+                # Transform: (cx, cy) -> (cy, 1-cx), swap w and h
+                boxes = [[cls_id, cy, 1.0 - cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
 
-    print(f"Detailed report saved: {report_path}")
+            elif aug_type == "rotate_90_ccw":
+                img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                # Transform: (cx, cy) -> (1-cy, cx), swap w and h
+                boxes = [[cls_id, 1.0 - cy, cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
 
-    def _apply_strong_augmentation(self, img_path, label_path):
-        """
-        Apply strong augmentations including flips and rotations.
+            elif aug_type == "rotate_180":
+                img = cv2.rotate(img, cv2.ROTATE_180)
+                # Transform: (cx, cy) -> (1-cx, 1-cy)
+                boxes = [[cls_id, 1.0 - cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
 
-        Args:
-            img_path (str): Path to original image
-            label_path (str): Path to original label file
+            # Convert boxes back to label format
+            aug_labels = []
+            for cls_id, cx, cy, bw, bh in boxes:
+                # Clip coordinates to valid range
+                cx = np.clip(cx, 0.0, 1.0)
+                cy = np.clip(cy, 0.0, 1.0)
+                bw = np.clip(bw, 0.0, 1.0)
+                bh = np.clip(bh, 0.0, 1.0)
 
-        Returns:
-            tuple: (augmented_image, augmented_labels)
-        """
-        # Read image
+                aug_labels.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+
+            return img, aug_labels
+
+
+def generate_custom_confusion_matrix(
+    self,
+    model_path,
+    config_path,
+    conf_threshold=0.3,
+    iou_threshold=0.5,
+    match_iou_threshold=0.5,
+    save_visualizations=True,
+):
+    """
+    Generate custom confusion matrix with user-defined parameters.
+
+    Args:
+        model_path (str): Path to trained model
+        config_path (str): Path to dataset config
+        conf_threshold (float): Confidence threshold for predictions
+        iou_threshold (float): IoU threshold for NMS
+        match_iou_threshold (float): IoU threshold to match predictions with ground truth
+        save_visualizations (bool): Save confusion matrix plots
+
+    Returns:
+        dict: Confusion matrix results and metrics
+    """
+    print("\n" + "=" * 70)
+    print("CUSTOM CONFUSION MATRIX GENERATION")
+    print("=" * 70)
+    print(f"Parameters:")
+    print(f"  Confidence threshold: {conf_threshold}")
+    print(f"  NMS IoU threshold: {iou_threshold}")
+    print(f"  Match IoU threshold: {match_iou_threshold}")
+
+    # Load model
+    print(f"\nLoading model: {model_path}")
+    model = YOLO(model_path)
+
+    # Load dataset config
+    with open(config_path, "r") as f:
+        data_config = yaml.safe_load(f)
+
+    dataset_path = data_config["path"]
+    val_images_dir = os.path.join(
+        dataset_path, data_config["val"], "" if "images" in data_config["val"] else "../images"
+    )
+    val_labels_dir = val_images_dir.replace("images", "labels")
+
+    print(f"Validation images: {val_images_dir}")
+    print(f"Validation labels: {val_labels_dir}")
+
+    # Initialize confusion matrix
+    num_classes = len(self.class_names)
+    confusion_matrix_data = np.zeros((num_classes + 1, num_classes + 1), dtype=np.int32)
+    # Rows: Ground truth (+ background class at end)
+    # Cols: Predictions (+ background class at end)
+
+    class_names_with_bg = self.class_names + ["Background"]
+
+    # Process each validation image
+    print(f"\nProcessing validation images...")
+    total_gt_boxes = 0
+    total_pred_boxes = 0
+    matched_predictions = 0
+
+    val_images = [
+        f for f in os.listdir(val_images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
+    ]
+
+    for idx, img_file in enumerate(val_images):
+        if (idx + 1) % 50 == 0:
+            print(f"  Processed {idx + 1}/{len(val_images)} images...")
+
+        img_path = os.path.join(val_images_dir, img_file)
+        label_file = os.path.splitext(img_file)[0] + ".txt"
+        label_path = os.path.join(val_labels_dir, label_file)
+
+        # Load image to get dimensions
         img = cv2.imread(img_path)
         if img is None:
-            raise ValueError(f"Could not read image: {img_path}")
-
+            continue
         h, w = img.shape[:2]
 
-        # Read labels
-        with open(label_path, "r") as f:
-            labels = f.readlines()
+        # Load ground truth
+        gt_boxes = self._load_ground_truth_boxes(label_path, w, h)
+        total_gt_boxes += len(gt_boxes)
 
-        # Parse labels
-        boxes = []
-        for line in labels:
+        # Run prediction
+        results = model.predict(
+            source=img_path, conf=conf_threshold, iou=iou_threshold, verbose=False
+        )
+
+        # Extract predictions
+        pred_boxes = self._extract_predictions(results[0], w, h)
+        total_pred_boxes += len(pred_boxes)
+
+        # Match predictions to ground truth
+        matches = self._match_boxes(gt_boxes, pred_boxes, match_iou_threshold)
+        matched_predictions += len(matches["matched"])
+
+        # Update confusion matrix
+        self._update_confusion_matrix(
+            confusion_matrix_data, gt_boxes, pred_boxes, matches, num_classes
+        )
+
+    print(f"\nProcessing complete!")
+    print(f"  Total ground truth boxes: {total_gt_boxes}")
+    print(f"  Total predicted boxes: {total_pred_boxes}")
+    print(f"  Matched predictions: {matched_predictions}")
+
+    # Calculate metrics
+    metrics = self._calculate_confusion_metrics(confusion_matrix_data, class_names_with_bg)
+
+    # Print summary
+    self._print_confusion_summary(confusion_matrix_data, class_names_with_bg, metrics)
+
+    # Save visualizations
+    if save_visualizations:
+        self._save_confusion_visualizations(
+            confusion_matrix_data,
+            class_names_with_bg,
+            metrics,
+            conf_threshold,
+            iou_threshold,
+            match_iou_threshold,
+        )
+
+    # Save detailed report
+    self._save_confusion_report(
+        confusion_matrix_data,
+        class_names_with_bg,
+        metrics,
+        conf_threshold,
+        iou_threshold,
+        match_iou_threshold,
+        total_gt_boxes,
+        total_pred_boxes,
+        matched_predictions,
+    )
+
+    return {
+        "confusion_matrix": confusion_matrix_data,
+        "class_names": class_names_with_bg,
+        "metrics": metrics,
+        "total_gt_boxes": total_gt_boxes,
+        "total_pred_boxes": total_pred_boxes,
+        "matched_predictions": matched_predictions,
+    }
+
+
+def _load_ground_truth_boxes(self, label_path, img_w, img_h):
+    """
+    Load ground truth boxes from YOLO label file.
+
+    Returns:
+        list: List of dicts with box info
+    """
+    boxes = []
+
+    if not os.path.exists(label_path):
+        return boxes
+
+    try:
+        with open(label_path, "r") as f:
+            lines = f.readlines()
+
+        for line in lines:
             parts = line.strip().split()
             if len(parts) >= 5:
                 class_id = int(parts[0])
-                cx, cy, bw, bh = map(float, parts[1:5])
-                boxes.append([class_id, cx, cy, bw, bh])
+                cx, cy, w, h = map(float, parts[1:5])
 
-        # Randomly select augmentation
-        aug_type = np.random.choice(
-            ["horizontal_flip", "vertical_flip", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
+                # Convert to absolute coordinates
+                x1 = int((cx - w / 2) * img_w)
+                y1 = int((cy - h / 2) * img_h)
+                x2 = int((cx + w / 2) * img_w)
+                y2 = int((cy + h / 2) * img_h)
+
+                boxes.append({"class_id": class_id, "bbox": [x1, y1, x2, y2], "matched": False})
+    except Exception as e:
+        print(f"Warning: Error loading labels from {label_path}: {e}")
+
+    return boxes
+
+
+def _extract_predictions(self, result, img_w, img_h):
+    """
+    Extract predictions from YOLO result object.
+
+    Returns:
+        list: List of dicts with prediction info
+    """
+    predictions = []
+
+    if result.boxes is None or len(result.boxes) == 0:
+        return predictions
+
+    boxes = result.boxes
+
+    for i in range(len(boxes)):
+        x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+        conf = float(boxes.conf[i].cpu().numpy())
+        class_id = int(boxes.cls[i].cpu().numpy())
+
+        predictions.append(
+            {
+                "class_id": class_id,
+                "confidence": conf,
+                "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                "matched": False,
+            }
         )
 
-        # Apply augmentation
-        if aug_type == "horizontal_flip":
-            img = cv2.flip(img, 1)
-            boxes = [[cls_id, 1.0 - cx, cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+    return predictions
 
-        elif aug_type == "vertical_flip":
-            img = cv2.flip(img, 0)
-            boxes = [[cls_id, cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
 
-        elif aug_type == "rotate_90_cw":
-            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-            # Transform: (cx, cy) -> (cy, 1-cx), swap w and h
-            boxes = [[cls_id, cy, 1.0 - cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+def _calculate_iou(self, box1, box2):
+    """
+    Calculate IoU between two boxes.
 
-        elif aug_type == "rotate_90_ccw":
-            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-            # Transform: (cx, cy) -> (1-cy, cx), swap w and h
-            boxes = [[cls_id, 1.0 - cy, cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+    Args:
+        box1, box2: [x1, y1, x2, y2]
 
-        elif aug_type == "rotate_180":
-            img = cv2.rotate(img, cv2.ROTATE_180)
-            # Transform: (cx, cy) -> (1-cx, 1-cy)
-            boxes = [[cls_id, 1.0 - cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+    Returns:
+        float: IoU score
+    """
+    x1_inter = max(box1[0], box2[0])
+    y1_inter = max(box1[1], box2[1])
+    x2_inter = min(box1[2], box2[2])
+    y2_inter = min(box1[3], box2[3])
 
-        # Convert boxes back to label format
-        aug_labels = []
-        for cls_id, cx, cy, bw, bh in boxes:
-            # Clip coordinates to valid range
-            cx = np.clip(cx, 0.0, 1.0)
-            cy = np.clip(cy, 0.0, 1.0)
-            bw = np.clip(bw, 0.0, 1.0)
-            bh = np.clip(bh, 0.0, 1.0)
+    if x2_inter < x1_inter or y2_inter < y1_inter:
+        return 0.0
 
-            aug_labels.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+    inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
 
-        return img, aug_labels
+    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+    union_area = box1_area + box2_area - inter_area
+
+    if union_area == 0:
+        return 0.0
+
+    return inter_area / union_area
+
+
+def _match_boxes(self, gt_boxes, pred_boxes, iou_threshold):
+    """
+    Match predictions to ground truth boxes using IoU threshold.
+
+    Returns:
+        dict: Matching information
+    """
+    matches = {
+        "matched": [],  # (gt_idx, pred_idx, iou, gt_class, pred_class)
+        "unmatched_gt": [],  # gt_idx
+        "unmatched_pred": [],  # pred_idx
+    }
+
+    if len(gt_boxes) == 0 or len(pred_boxes) == 0:
+        matches["unmatched_gt"] = list(range(len(gt_boxes)))
+        matches["unmatched_pred"] = list(range(len(pred_boxes)))
+        return matches
+
+    # Calculate IoU matrix
+    iou_matrix = np.zeros((len(gt_boxes), len(pred_boxes)))
+
+    for i, gt_box in enumerate(gt_boxes):
+        for j, pred_box in enumerate(pred_boxes):
+            iou_matrix[i, j] = self._calculate_iou(gt_box["bbox"], pred_box["bbox"])
+
+    # Greedy matching: find best matches first
+    gt_matched = [False] * len(gt_boxes)
+    pred_matched = [False] * len(pred_boxes)
+
+    # Sort all possible matches by IoU (descending)
+    match_candidates = []
+    for i in range(len(gt_boxes)):
+        for j in range(len(pred_boxes)):
+            if iou_matrix[i, j] >= iou_threshold:
+                match_candidates.append((i, j, iou_matrix[i, j]))
+
+    match_candidates.sort(key=lambda x: x[2], reverse=True)
+
+    # Assign matches greedily
+    for gt_idx, pred_idx, iou in match_candidates:
+        if not gt_matched[gt_idx] and not pred_matched[pred_idx]:
+            matches["matched"].append(
+                {
+                    "gt_idx": gt_idx,
+                    "pred_idx": pred_idx,
+                    "iou": iou,
+                    "gt_class": gt_boxes[gt_idx]["class_id"],
+                    "pred_class": pred_boxes[pred_idx]["class_id"],
+                }
+            )
+            gt_matched[gt_idx] = True
+            pred_matched[pred_idx] = True
+
+    # Record unmatched
+    for i, matched in enumerate(gt_matched):
+        if not matched:
+            matches["unmatched_gt"].append(i)
+
+    for j, matched in enumerate(pred_matched):
+        if not matched:
+            matches["unmatched_pred"].append(j)
+
+    return matches
+
+
+def _update_confusion_matrix(self, cm, gt_boxes, pred_boxes, matches, num_classes):
+    """
+    Update confusion matrix based on matches.
+
+    Confusion matrix structure:
+    - Rows: Ground truth classes (+ background)
+    - Cols: Predicted classes (+ background)
+    """
+    # Process matched boxes
+    for match in matches["matched"]:
+        gt_class = match["gt_class"]
+        pred_class = match["pred_class"]
+
+        if gt_class < num_classes and pred_class < num_classes:
+            cm[gt_class, pred_class] += 1
+
+    # Process unmatched ground truth (false negatives -> predicted as background)
+    for gt_idx in matches["unmatched_gt"]:
+        gt_class = gt_boxes[gt_idx]["class_id"]
+        if gt_class < num_classes:
+            cm[gt_class, num_classes] += 1  # GT class predicted as background
+
+    # Process unmatched predictions (false positives -> background predicted as class)
+    for pred_idx in matches["unmatched_pred"]:
+        pred_class = pred_boxes[pred_idx]["class_id"]
+        if pred_class < num_classes:
+            cm[num_classes, pred_class] += 1  # Background predicted as class
+
+
+def _calculate_confusion_metrics(self, cm, class_names):
+    """
+    Calculate per-class metrics from confusion matrix.
+
+    Returns:
+        dict: Metrics per class
+    """
+    num_classes = len(class_names) - 1  # Exclude background
+    metrics = {}
+
+    for i in range(num_classes):
+        class_name = class_names[i]
+
+        # True positives: diagonal element
+        tp = cm[i, i]
+
+        # False positives: column sum - diagonal
+        fp = np.sum(cm[:, i]) - tp
+
+        # False negatives: row sum - diagonal
+        fn = np.sum(cm[i, :]) - tp
+
+        # Calculate metrics
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+
+        metrics[class_name] = {
+            "tp": int(tp),
+            "fp": int(fp),
+            "fn": int(fn),
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+        }
+
+    return metrics
+
+
+def _print_confusion_summary(self, cm, class_names, metrics):
+    """
+    Print confusion matrix summary.
+    """
+    print("\n" + "=" * 70)
+    print("CONFUSION MATRIX METRICS")
+    print("=" * 70)
+    print(
+        f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}"
+    )
+    print("-" * 70)
+
+    for class_name, m in metrics.items():
+        print(
+            f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
+            f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}"
+        )
+
+    # Overall metrics
+    total_tp = sum(m["tp"] for m in metrics.values())
+    total_fp = sum(m["fp"] for m in metrics.values())
+    total_fn = sum(m["fn"] for m in metrics.values())
+
+    overall_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+    overall_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+    overall_f1 = (
+        2 * (overall_precision * overall_recall) / (overall_precision + overall_recall)
+        if (overall_precision + overall_recall) > 0
+        else 0.0
+    )
+
+    print("-" * 70)
+    print(
+        f"{'OVERALL':<20} {total_tp:<8} {total_fp:<8} {total_fn:<8} "
+        f"{overall_precision:<12.3f} {overall_recall:<12.3f} {overall_f1:<12.3f}"
+    )
+
+
+def _save_confusion_visualizations(
+    self, cm, class_names, metrics, conf_threshold, iou_threshold, match_iou_threshold
+):
+    """
+    Save confusion matrix visualizations.
+    """
+    save_dir = os.path.join(self.save_dir, "custom_confusion_matrix")
+    os.makedirs(save_dir, exist_ok=True)
+
+    # 1. Full confusion matrix heatmap
+    plt.figure(figsize=(14, 12))
+    sns.heatmap(
+        cm,
+        annot=True,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar_kws={"label": "Count"},
+    )
+    plt.title(
+        f"Confusion Matrix\nConf={conf_threshold}, IoU={iou_threshold}, Match IoU={match_iou_threshold}"
+    )
+    plt.ylabel("Ground Truth")
+    plt.xlabel("Predicted")
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "confusion_matrix_full.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+
+    # 2. Normalized confusion matrix (by ground truth)
+    cm_normalized = cm.astype("float")
+    row_sums = cm_normalized.sum(axis=1, keepdims=True)
+    row_sums[row_sums == 0] = 1  # Avoid division by zero
+    cm_normalized = cm_normalized / row_sums
+
+    plt.figure(figsize=(14, 12))
+    sns.heatmap(
+        cm_normalized,
+        annot=True,
+        fmt=".2f",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+        cbar_kws={"label": "Percentage"},
+    )
+    plt.title(
+        f"Normalized Confusion Matrix (by Ground Truth)\nConf={conf_threshold}, IoU={iou_threshold}"
+    )
+    plt.ylabel("Ground Truth")
+    plt.xlabel("Predicted")
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(save_dir, "confusion_matrix_normalized.png"), dpi=300, bbox_inches="tight"
+    )
+    plt.close()
+
+    # 3. Metrics bar plot
+    class_names_only = [name for name in class_names if name != "Background"]
+    precisions = [metrics[name]["precision"] for name in class_names_only]
+    recalls = [metrics[name]["recall"] for name in class_names_only]
+    f1_scores = [metrics[name]["f1"] for name in class_names_only]
+
+    x = np.arange(len(class_names_only))
+    width = 0.25
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.bar(x - width, precisions, width, label="Precision", color="skyblue")
+    ax.bar(x, recalls, width, label="Recall", color="lightcoral")
+    ax.bar(x + width, f1_scores, width, label="F1-Score", color="lightgreen")
+
+    ax.set_ylabel("Score")
+    ax.set_title(f"Per-Class Metrics\nConf={conf_threshold}, IoU={iou_threshold}")
+    ax.set_xticks(x)
+    ax.set_xticklabels(class_names_only, rotation=45, ha="right")
+    ax.legend()
+    ax.set_ylim([0, 1.0])
+    ax.grid(axis="y", alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, "metrics_per_class.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"\nVisualizations saved to: {save_dir}")
+
+
+def _save_confusion_report(
+    self,
+    cm,
+    class_names,
+    metrics,
+    conf_threshold,
+    iou_threshold,
+    match_iou_threshold,
+    total_gt_boxes,
+    total_pred_boxes,
+    matched_predictions,
+):
+    """
+    Save detailed confusion matrix report.
+    """
+    report_path = os.path.join(self.save_dir, "custom_confusion_matrix", "report.txt")
+    os.makedirs(os.path.dirname(report_path), exist_ok=True)
+
+    with open(report_path, "w") as f:
+        f.write("=" * 70 + "\n")
+        f.write("CUSTOM CONFUSION MATRIX REPORT\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write("Parameters:\n")
+        f.write(f"  Confidence threshold: {conf_threshold}\n")
+        f.write(f"  NMS IoU threshold: {iou_threshold}\n")
+        f.write(f"  Match IoU threshold: {match_iou_threshold}\n\n")
+
+        f.write("Dataset statistics:\n")
+        f.write(f"  Total ground truth boxes: {total_gt_boxes}\n")
+        f.write(f"  Total predicted boxes: {total_pred_boxes}\n")
+        f.write(f"  Matched predictions: {matched_predictions}\n")
+        f.write(f"  Match rate: {matched_predictions/total_pred_boxes*100:.2f}%\n\n")
+
+        f.write("Per-class metrics:\n")
+        f.write("-" * 70 + "\n")
+        f.write(
+            f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}\n"
+        )
+        f.write("-" * 70 + "\n")
+
+        for class_name, m in metrics.items():
+            f.write(
+                f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
+                f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}\n"
+            )
+
+        f.write("\n" + "=" * 70 + "\n")
+        f.write("Confusion Matrix:\n")
+        f.write("=" * 70 + "\n\n")
+
+        # Write confusion matrix
+        header = "GT \\ Pred".ljust(20)
+        for name in class_names:
+            header += name[:10].ljust(12)
+        f.write(header + "\n")
+        f.write("-" * 70 + "\n")
+
+        for i, gt_name in enumerate(class_names):
+            row = gt_name[:18].ljust(20)
+            for j in range(len(class_names)):
+                row += str(cm[i, j]).ljust(12)
+            f.write(row + "\n")
+
+    print(f"Detailed report saved to: {report_path}")
 
 
 # Main training function for detection
@@ -1660,7 +2226,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=16)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
@@ -1668,8 +2234,6 @@ def main_detection_training():
 
         print("\nStep 2: Preparing detection dataset...")
         config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.0, val_split=0.2)
-
-        # Extract the dataset directory from config path
         prepared_dataset_dir = os.path.dirname(config_path)
 
         print("\nStep 3: Applying selective minority oversampling...")
@@ -1679,10 +2243,7 @@ def main_detection_training():
             minority_threshold=2500,
             max_replication_factor=8,
         )
-
-        # Update config path to point to oversampled dataset
         config_path = os.path.join(oversampled_dataset_dir, "data.yaml")
-        print(f"Using oversampled dataset config: {config_path}")
 
         print("\nStep 4: Initializing YOLO detection model...")
         if not trainer.initialize_yolo_detection_model():
@@ -1690,24 +2251,37 @@ def main_detection_training():
 
         print("\nStep 5: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads - 25 epochs
-            25: 0.40,  # + Neck PAN - 25 epochs
-            50: 0.60,  # + Neck FPN - 30 epochs
-            80: 0.75,  # + Late Backbone - 30 epochs
-            110: 0.90,  # + Mid Backbone - 35 epochs
-            145: 1.0,  # Full model - 15 epochs
+            0: 0.20,  # Detection heads (0-40)
+            40: 0.40,  # + Neck PAN (40-80)
+            80: 0.60,  # + Neck FPN (80-120)
+            120: 0.75,  # + Late backbone (120-160)
+            160: 0.90,  # + Mid backbone (160-200)
+            200: 1.0,  # Full model (200-210)
         }
-
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=160, unfreeze_schedule=custom_schedule
+            config_path, epochs=210, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 6: Comprehensive validation of all checkpoints...")
         validation_results = trainer.validate_all_checkpoints(config_path)
 
         if validation_results:
-            print(f"\nBest model available at: {validation_results['best_model_path']}")
-            print(f"   Use this model for inference!")
+            best_model_path = validation_results["best_model_path"]
+            print(f"\nBest model: {best_model_path}")
+
+            # Step 7: Generate custom confusion matrix
+            print("\nStep 7: Generating custom confusion matrix...")
+            confusion_results = trainer.generate_custom_confusion_matrix(
+                model_path=best_model_path,
+                config_path=config_path,
+                conf_threshold=0.30,
+                iou_threshold=0.5,
+                match_iou_threshold=0.5,
+                save_visualizations=True,
+            )
+
+            print("\nCustom confusion matrix generated successfully!")
+            print(f"Results saved to: {trainer.save_dir}/custom_confusion_matrix/")
 
         # Cleanup
         if os.path.exists("dataset/"):
@@ -1715,13 +2289,6 @@ def main_detection_training():
 
         print("\n" + "=" * 60)
         print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
-        print("=" * 60)
-        print("Features implemented:")
-        print("  - Pure YOLO detection (no classification confusion)")
-        print("  - Aggressive class weighting for imbalanced datasets")
-        print("  - Minority class oversampling with strong augmentations")
-        print("  - Detection-optimized progressive unfreezing")
-        print("  - Proper YOLO architecture understanding")
         print("=" * 60)
 
         return trainer
