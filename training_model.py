@@ -1208,32 +1208,44 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return class_results
 
-    def aggressive_minority_oversampling(
-        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+    def selective_minority_oversampling(
+        self,
+        dataset_dir,
+        target_samples_per_class=5000,
+        minority_threshold=2500,
+        max_replication_factor=8,
     ):
         """
-        Aggressive oversampling of minority classes with strong augmentations.
+        Selective oversampling that prioritizes images with minority classes only.
+
+        Strategy:
+        1. Identify minority classes
+        2. Find images that contain ONLY minority classes (pure minority images)
+        3. Find images with minority + majority mix (mixed images)
+        4. Prioritize replicating pure minority images
+        5. Use mixed images only if needed, with lower replication factor
 
         Args:
             dataset_dir (str): Path to cleaned detection dataset
             target_samples_per_class (int): Target number of samples for minority classes
             minority_threshold (int): Classes below this are considered minority
+            max_replication_factor (int): Maximum replication factor per image
 
         Returns:
             str: Path to oversampled dataset
         """
         print("\n" + "=" * 70)
-        print("AGGRESSIVE MINORITY CLASS OVERSAMPLING")
+        print("SELECTIVE MINORITY CLASS OVERSAMPLING")
         print("=" * 70)
 
-        # Analyze current class distribution
         train_images_dir = os.path.join(dataset_dir, "images", "train")
         train_labels_dir = os.path.join(dataset_dir, "labels", "train")
 
-        # Count samples per class
+        # Step 1: Analyze class distribution
         class_samples = {name: 0 for name in self.class_names}
-        images_by_class = {name: [] for name in self.class_names}
+        image_metadata = {}  # Store detailed info about each image
 
+        print("\nAnalyzing dataset...")
         for img_file in os.listdir(train_images_dir):
             if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
@@ -1241,125 +1253,251 @@ class AdaptiveYOLOv12DetectionTrainer:
             label_file = os.path.splitext(img_file)[0] + ".txt"
             label_path = os.path.join(train_labels_dir, label_file)
 
-            if os.path.exists(label_path):
-                with open(label_path, "r") as f:
-                    lines = f.readlines()
+            if not os.path.exists(label_path):
+                continue
 
-                # Track which classes are in this image
-                classes_in_image = set()
-                for line in lines:
-                    parts = line.strip().split()
-                    if len(parts) >= 5:
-                        class_id = int(parts[0])
-                        if class_id < len(self.class_names):
-                            class_name = self.class_names[class_id]
-                            class_samples[class_name] += 1
-                            classes_in_image.add(class_name)
+            with open(label_path, "r") as f:
+                lines = f.readlines()
 
-                # Add image to all classes it contains
-                for class_name in classes_in_image:
-                    images_by_class[class_name].append(img_file)
+            # Analyze this image
+            classes_in_image = {}
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    class_id = int(parts[0])
+                    if class_id < len(self.class_names):
+                        class_name = self.class_names[class_id]
+                        classes_in_image[class_name] = classes_in_image.get(class_name, 0) + 1
+                        class_samples[class_name] += 1
 
-        # Display current distribution
-        print("\nCurrent class distribution:")
-        print(f"{'Class':<20} {'Samples':<10} {'Images':<10} {'Status':<15}")
+            # Store metadata
+            if classes_in_image:
+                image_metadata[img_file] = {
+                    "classes": set(classes_in_image.keys()),
+                    "class_counts": classes_in_image,
+                    "total_objects": sum(classes_in_image.values()),
+                }
+
+        # Step 2: Identify minority and majority classes
+        minority_classes = set()
+        majority_classes = set()
+
+        print("\nClass distribution:")
+        print(f"{'Class':<20} {'Samples':<10} {'Status':<15}")
         print("-" * 70)
 
-        minority_classes = []
         for class_name in self.class_names:
             samples = class_samples[class_name]
-            images = len(images_by_class[class_name])
-            status = "MINORITY" if samples < minority_threshold else "OK"
+            if samples == 0:
+                status = "NO SAMPLES"
+            elif samples < minority_threshold:
+                status = "MINORITY"
+                minority_classes.add(class_name)
+            else:
+                status = "MAJORITY"
+                majority_classes.add(class_name)
 
-            print(f"{class_name:<20} {samples:<10} {images:<10} {status:<15}")
-
-            if samples < minority_threshold and samples > 0:
-                minority_classes.append(class_name)
+            print(f"{class_name:<20} {samples:<10} {status:<15}")
 
         if not minority_classes:
             print("\nNo minority classes found. Skipping oversampling.")
             return dataset_dir
 
-        print(f"\nMinority classes to oversample: {minority_classes}")
+        print(f"\nMinority classes: {sorted(minority_classes)}")
+        print(f"Majority classes: {sorted(majority_classes)}")
 
-        # Calculate replication factors
+        # Step 3: Categorize images
+        pure_minority_images = {}  # Images with ONLY minority classes
+        mixed_images = {}  # Images with minority + majority
+
+        for img_file, metadata in image_metadata.items():
+            img_classes = metadata["classes"]
+            minority_in_image = img_classes & minority_classes
+            majority_in_image = img_classes & majority_classes
+
+            if minority_in_image and not majority_in_image:
+                # Pure minority image
+                for minority_class in minority_in_image:
+                    if minority_class not in pure_minority_images:
+                        pure_minority_images[minority_class] = []
+                    pure_minority_images[minority_class].append(img_file)
+
+            elif minority_in_image and majority_in_image:
+                # Mixed image
+                for minority_class in minority_in_image:
+                    if minority_class not in mixed_images:
+                        mixed_images[minority_class] = []
+                    mixed_images[minority_class].append(img_file)
+
+        # Step 4: Calculate selective replication strategy
+        print("\n" + "=" * 70)
+        print("REPLICATION STRATEGY")
+        print("=" * 70)
+
         replication_plan = {}
+
         for class_name in minority_classes:
             current_samples = class_samples[class_name]
-            target = min(target_samples_per_class, current_samples * 10)  # Cap at 10x
-            replication_factor = max(2, int(target / current_samples))
+            target = min(target_samples_per_class, current_samples * max_replication_factor)
+            gap = target - current_samples
+
+            pure_imgs = pure_minority_images.get(class_name, [])
+            mixed_imgs = mixed_images.get(class_name, [])
+
+            # Calculate how many samples each pure image contributes
+            samples_per_pure_img = 0
+            for img in pure_imgs:
+                samples_per_pure_img += image_metadata[img]["class_counts"].get(class_name, 0)
+
+            # Strategy: prioritize pure minority images with higher replication
+            if pure_imgs:
+                # Replicate pure images more aggressively
+                pure_factor = min(
+                    max_replication_factor, max(2, int(gap / (samples_per_pure_img + 1)))
+                )
+                mixed_factor = min(max_replication_factor // 2, 2)  # Lower factor for mixed
+            else:
+                # No pure images, use mixed only
+                pure_factor = 0
+                mixed_factor = min(max_replication_factor, max(2, int(gap / current_samples)))
+
             replication_plan[class_name] = {
-                "current": current_samples,
-                "target": target,
-                "factor": replication_factor,
-                "images": images_by_class[class_name],
+                "current_samples": current_samples,
+                "target_samples": target,
+                "gap": gap,
+                "pure_images": pure_imgs,
+                "mixed_images": mixed_imgs,
+                "pure_factor": pure_factor,
+                "mixed_factor": mixed_factor,
+                "strategy": "pure_priority" if pure_imgs else "mixed_only",
             }
 
-        print("\nOversampling plan:")
-        for class_name, plan in replication_plan.items():
-            print(
-                f"  {class_name}: {plan['current']} → ~{plan['target']} "
-                f"({plan['factor']}x, {len(plan['images'])} images)"
-            )
+            print(f"\n{class_name}:")
+            print(f"  Current samples: {current_samples}")
+            print(f"  Target samples: {target}")
+            print(f"  Gap: {gap}")
+            print(f"  Pure minority images: {len(pure_imgs)} (replication: {pure_factor}x)")
+            print(f"  Mixed images: {len(mixed_imgs)} (replication: {mixed_factor}x)")
+            print(f"  Strategy: {replication_plan[class_name]['strategy']}")
 
-        # Create oversampled dataset
+        # Step 5: Create oversampled dataset
+        print("\n" + "=" * 70)
+        print("CREATING OVERSAMPLED DATASET")
+        print("=" * 70)
+
         oversampled_dir = dataset_dir + "_oversampled"
         if os.path.exists(oversampled_dir):
-            print(f"\nRemoving existing oversampled directory: {oversampled_dir}")
+            print(f"Removing existing oversampled directory...")
             shutil.rmtree(oversampled_dir)
 
-        # Copy original dataset structure
-        print("\nCopying original dataset...")
+        print("Copying original dataset...")
         shutil.copytree(dataset_dir, oversampled_dir)
 
         oversampled_images_dir = os.path.join(oversampled_dir, "images", "train")
         oversampled_labels_dir = os.path.join(oversampled_dir, "labels", "train")
 
-        # Apply oversampling with augmentations
-        print("\nApplying oversampling with strong augmentations...")
+        # Step 6: Apply selective oversampling
+        print("\nApplying selective augmentation...")
 
         total_augmented = 0
+        augmentation_stats = {
+            class_name: {"pure": 0, "mixed": 0} for class_name in minority_classes
+        }
+
         for class_name, plan in replication_plan.items():
             print(f"\nProcessing {class_name}...")
-            class_augmented = 0
 
-            for img_file in plan["images"]:
-                img_path = os.path.join(train_images_dir, img_file)
-                label_file = os.path.splitext(img_file)[0] + ".txt"
-                label_path = os.path.join(train_labels_dir, label_file)
+            # Process pure minority images (high priority)
+            if plan["pure_images"] and plan["pure_factor"] > 1:
+                print(f"  Augmenting {len(plan['pure_images'])} pure minority images...")
+                for img_file in plan["pure_images"]:
+                    img_path = os.path.join(train_images_dir, img_file)
+                    label_file = os.path.splitext(img_file)[0] + ".txt"
+                    label_path = os.path.join(train_labels_dir, label_file)
 
-                # Create (factor - 1) augmented versions (original already copied)
-                for aug_idx in range(plan["factor"] - 1):
-                    try:
-                        # Apply strong augmentation
-                        aug_img, aug_labels = self._apply_strong_augmentation(img_path, label_path)
+                    # Create (factor - 1) augmented versions
+                    for aug_idx in range(plan["pure_factor"] - 1):
+                        try:
+                            aug_img, aug_labels = self._apply_strong_augmentation(
+                                img_path, label_path
+                            )
 
-                        # Save augmented image
-                        base_name = os.path.splitext(img_file)[0]
-                        aug_img_name = f"{base_name}_aug_{class_name}_{aug_idx}.jpg"
-                        aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
+                            base_name = os.path.splitext(img_file)[0]
+                            aug_img_name = f"{base_name}_pure_{class_name}_{aug_idx}.jpg"
+                            aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
 
-                        cv2.imwrite(aug_img_path, aug_img)
+                            cv2.imwrite(aug_img_path, aug_img)
 
-                        # Save augmented labels
-                        aug_label_name = f"{base_name}_aug_{class_name}_{aug_idx}.txt"
-                        aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
+                            aug_label_name = f"{base_name}_pure_{class_name}_{aug_idx}.txt"
+                            aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
 
-                        with open(aug_label_path, "w") as f:
-                            f.writelines(aug_labels)
+                            with open(aug_label_path, "w") as f:
+                                f.writelines(aug_labels)
 
-                        class_augmented += 1
-                        total_augmented += 1
+                            augmentation_stats[class_name]["pure"] += 1
+                            total_augmented += 1
 
-                    except Exception as e:
-                        print(f"  Warning: Failed to augment {img_file}: {e}")
-                        continue
+                        except Exception as e:
+                            print(f"    Warning: Failed to augment {img_file}: {e}")
 
-            print(f"  Created {class_augmented} augmented images for {class_name}")
+            # Process mixed images (lower priority, lower factor)
+            if plan["mixed_images"] and plan["mixed_factor"] > 1:
+                # Limit number of mixed images to use
+                max_mixed_to_use = min(len(plan["mixed_images"]), len(plan["pure_images"]) * 2 + 10)
+                mixed_to_use = plan["mixed_images"][:max_mixed_to_use]
 
-        print(f"\nOversampling complete!")
-        print(f"   Total augmented images: {total_augmented}")
-        print(f"   Oversampled dataset: {oversampled_dir}")
+                print(
+                    f"  Augmenting {len(mixed_to_use)} mixed images (selected from {len(plan['mixed_images'])})..."
+                )
+                for img_file in mixed_to_use:
+                    img_path = os.path.join(train_images_dir, img_file)
+                    label_file = os.path.splitext(img_file)[0] + ".txt"
+                    label_path = os.path.join(train_labels_dir, label_file)
+
+                    # Create fewer augmented versions for mixed images
+                    for aug_idx in range(plan["mixed_factor"] - 1):
+                        try:
+                            aug_img, aug_labels = self._apply_strong_augmentation(
+                                img_path, label_path
+                            )
+
+                            base_name = os.path.splitext(img_file)[0]
+                            aug_img_name = f"{base_name}_mixed_{class_name}_{aug_idx}.jpg"
+                            aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
+
+                            cv2.imwrite(aug_img_path, aug_img)
+
+                            aug_label_name = f"{base_name}_mixed_{class_name}_{aug_idx}.txt"
+                            aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
+
+                            with open(aug_label_path, "w") as f:
+                                f.writelines(aug_labels)
+
+                            augmentation_stats[class_name]["mixed"] += 1
+                            total_augmented += 1
+
+                        except Exception as e:
+                            print(f"    Warning: Failed to augment {img_file}: {e}")
+
+            print(
+                f"  Created: {augmentation_stats[class_name]['pure']} pure + "
+                f"{augmentation_stats[class_name]['mixed']} mixed augmentations"
+            )
+
+        # Step 7: Generate report
+        print("\n" + "=" * 70)
+        print("OVERSAMPLING SUMMARY")
+        print("=" * 70)
+        print(f"Total augmented images: {total_augmented}")
+        print(f"Oversampled dataset: {oversampled_dir}")
+
+        print("\nAugmentation breakdown:")
+        for class_name in minority_classes:
+            stats = augmentation_stats[class_name]
+            print(
+                f"  {class_name}: {stats['pure']} pure + {stats['mixed']} mixed = "
+                f"{stats['pure'] + stats['mixed']} total"
+            )
 
         # Update dataset config
         config_path = os.path.join(oversampled_dir, "data.yaml")
@@ -1374,14 +1512,71 @@ class AdaptiveYOLOv12DetectionTrainer:
         with open(config_path, "w") as f:
             yaml.safe_dump(config, f, default_flow_style=False)
 
-        print(f"   Updated config: {config_path}")
-
-        # Generate oversampling report
-        self._generate_oversampling_report(
-            dataset_dir, oversampled_dir, replication_plan, total_augmented
+        # Generate detailed report
+        self._generate_selective_oversampling_report(
+            dataset_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
         )
 
         return oversampled_dir
+
+
+def _generate_selective_oversampling_report(
+    self, original_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
+):
+    """
+    Generate comprehensive report for selective oversampling.
+    """
+    report_path = os.path.join(self.save_dir, "selective_oversampling_report.txt")
+
+    with open(report_path, "w") as f:
+        f.write("=" * 70 + "\n")
+        f.write("SELECTIVE OVERSAMPLING REPORT\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write(f"Original dataset: {original_dir}\n")
+        f.write(f"Oversampled dataset: {oversampled_dir}\n")
+        f.write(f"Total augmented images: {total_augmented}\n\n")
+
+        f.write("Strategy: Selective minority oversampling\n")
+        f.write("  - Pure minority images: High replication factor\n")
+        f.write("  - Mixed images: Lower replication factor (conservative)\n\n")
+
+        f.write("Replication details:\n")
+        f.write("-" * 70 + "\n")
+        f.write(
+            f"{'Class':<15} {'Current':<10} {'Target':<10} {'Pure Imgs':<12} "
+            f"{'Mixed Imgs':<12} {'Strategy':<15}\n"
+        )
+        f.write("-" * 70 + "\n")
+
+        for class_name, plan in replication_plan.items():
+            f.write(
+                f"{class_name:<15} {plan['current_samples']:<10} "
+                f"{plan['target_samples']:<10} "
+                f"{len(plan['pure_images'])}x{plan['pure_factor']:<8} "
+                f"{len(plan['mixed_images'])}x{plan['mixed_factor']:<8} "
+                f"{plan['strategy']:<15}\n"
+            )
+
+        f.write("\nAugmentation statistics:\n")
+        f.write("-" * 70 + "\n")
+        f.write(f"{'Class':<15} {'Pure Augs':<12} {'Mixed Augs':<12} {'Total':<10}\n")
+        f.write("-" * 70 + "\n")
+
+        for class_name, stats in augmentation_stats.items():
+            total = stats["pure"] + stats["mixed"]
+            f.write(f"{class_name:<15} {stats['pure']:<12} {stats['mixed']:<12} {total:<10}\n")
+
+        f.write("\n" + "=" * 70 + "\n")
+        f.write("Augmentation types applied:\n")
+        f.write("  - Horizontal flip\n")
+        f.write("  - Vertical flip\n")
+        f.write("  - 90 degree clockwise rotation\n")
+        f.write("  - 90 degree counter-clockwise rotation\n")
+        f.write("  - 180 degree rotation (upside down)\n")
+        f.write("=" * 70 + "\n")
+
+    print(f"Detailed report saved: {report_path}")
 
     def _apply_strong_augmentation(self, img_path, label_path):
         """
@@ -1456,109 +1651,6 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return img, aug_labels
 
-    def _generate_oversampling_report(
-        self, original_dir, oversampled_dir, replication_plan, total_augmented
-    ):
-        """
-        Generate comprehensive oversampling report.
-
-        Args:
-            original_dir (str): Original dataset directory
-            oversampled_dir (str): Oversampled dataset directory
-            replication_plan (dict): Replication plan details
-            total_augmented (int): Total number of augmented images
-        """
-        report_path = os.path.join(self.save_dir, "oversampling_report.txt")
-
-        with open(report_path, "w") as f:
-            f.write("=" * 70 + "\n")
-            f.write("OVERSAMPLING REPORT\n")
-            f.write("=" * 70 + "\n\n")
-
-            f.write(f"Original dataset: {original_dir}\n")
-            f.write(f"Oversampled dataset: {oversampled_dir}\n")
-            f.write(f"Total augmented images: {total_augmented}\n\n")
-
-            f.write("Replication plan:\n")
-            f.write("-" * 70 + "\n")
-            f.write(
-                f"{'Class':<20} {'Original':<12} {'Target':<12} {'Factor':<10} {'Images':<10}\n"
-            )
-            f.write("-" * 70 + "\n")
-
-            for class_name, plan in replication_plan.items():
-                f.write(
-                    f"{class_name:<20} {plan['current']:<12} {plan['target']:<12} "
-                    f"{plan['factor']:<10} {len(plan['images']):<10}\n"
-                )
-
-            f.write("\n" + "=" * 70 + "\n")
-            f.write("Augmentation types applied:\n")
-            f.write("  - Horizontal flip\n")
-            f.write("  - Vertical flip\n")
-            f.write("  - 90 degree clockwise rotation\n")
-            f.write("  - 90 degree counter-clockwise rotation\n")
-            f.write("  - 180 degree rotation (upside down)\n")
-            f.write("=" * 70 + "\n")
-
-        print(f"\nOversampling report saved: {report_path}")
-
-    def validate_detection_model(self, config_path):
-        """Validate the trained detection model."""
-        if self.model is None:
-            print("No model to validate")
-            return None
-
-        print("\nValidating detection model...")
-        try:
-            # Run validation
-            results = self.model.val(data=config_path, conf=self.default_conf)
-
-            print("Validation completed successfully!")
-            print(f"mAP50: {results.box.map50:.3f}")
-            print(f"mAP50-95: {results.box.map:.3f}")
-
-            # Class-wise metrics
-            if hasattr(results.box, "ap_class_index"):
-                print("\nClass-wise mAP50:")
-                for i, class_idx in enumerate(results.box.ap_class_index):
-                    if class_idx < len(self.class_names):
-                        class_name = self.class_names[class_idx]
-                        ap = results.box.ap50[i] if i < len(results.box.ap50) else 0
-                        print(f"  {class_name}: {ap:.3f}")
-
-            return results
-
-        except Exception as e:
-            print(f"Validation failed: {e}")
-            return None
-
-    def predict_with_detection_model(self, source_path, save_results=True):
-        """Run predictions with the detection model."""
-        if self.model is None:
-            print("No model available for prediction")
-            return None
-
-        print(f"\nRunning detection predictions on: {source_path}")
-
-        try:
-            results = self.model.predict(
-                source=source_path,
-                conf=self.default_conf,
-                iou=0.5,
-                max_det=350,
-                save=save_results,
-                project=self.save_dir,
-                name="predictions",
-            )
-
-            print(f"Predictions completed! Results saved in: {self.save_dir}/predictions")
-            return results
-
-        except Exception as e:
-            print(f"Prediction failed: {e}")
-            return None
-
 
 # Main training function for detection
 def main_detection_training():
@@ -1568,7 +1660,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=16)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
@@ -1580,9 +1672,12 @@ def main_detection_training():
         # Extract the dataset directory from config path
         prepared_dataset_dir = os.path.dirname(config_path)
 
-        print("\nStep 3: Applying aggressive minority oversampling...")
-        oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
-            dataset_dir=prepared_dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+        print("\nStep 3: Applying selective minority oversampling...")
+        oversampled_dataset_dir = trainer.selective_minority_oversampling(
+            dataset_dir=prepared_dataset_dir,
+            target_samples_per_class=5000,
+            minority_threshold=2500,
+            max_replication_factor=8,
         )
 
         # Update config path to point to oversampled dataset
@@ -1595,16 +1690,16 @@ def main_detection_training():
 
         print("\nStep 5: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads (0-40)
-            40: 0.40,  # + Neck PAN (40-80)
-            80: 0.60,  # + Neck FPN (80-120)
-            120: 0.75,  # + Late backbone (120-160)
-            160: 0.90,  # + Mid backbone (160-200)
-            200: 1.0,  # Full model (200-210)
+            0: 0.20,  # Detection heads - 25 epochs
+            25: 0.40,  # + Neck PAN - 25 epochs
+            50: 0.60,  # + Neck FPN - 30 epochs
+            80: 0.75,  # + Late Backbone - 30 epochs
+            110: 0.90,  # + Mid Backbone - 35 epochs
+            145: 1.0,  # Full model - 15 epochs
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=210, unfreeze_schedule=custom_schedule
+            config_path, epochs=160, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 6: Comprehensive validation of all checkpoints...")
