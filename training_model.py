@@ -439,14 +439,14 @@ class AdaptiveYOLOv12DetectionTrainer:
         elif imbalance_ratio > 20:
             # Power weighting for severe cases
             power_weights = np.power(max_count / counts, 0.75)
-            aggressive_weights = power_weights * 1.5
-            strategy = "power weighting (0.75 exp, 1.5x amplified)"
+            aggressive_weights = power_weights * 1.2
+            strategy = "power weighting (0.75 exp, 1.2x amplified)"
 
         elif imbalance_ratio > 10:
             # Enhanced square root for high imbalance
             sqrt_weights = np.sqrt(max_count / counts)
-            aggressive_weights = sqrt_weights * 1.5
-            strategy = "enhanced sqrt (1.5x amplified)"
+            aggressive_weights = sqrt_weights * 1.2
+            strategy = "enhanced sqrt (1.2x amplified)"
 
         else:
             # Amplified linear for moderate imbalance
@@ -1208,44 +1208,32 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return class_results
 
-    def selective_minority_oversampling(
-        self,
-        dataset_dir,
-        target_samples_per_class=5000,
-        minority_threshold=2500,
-        max_replication_factor=8,
+    def aggressive_minority_oversampling(
+        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
     ):
         """
-        Selective oversampling that prioritizes images with minority classes only.
-
-        Strategy:
-        1. Identify minority classes
-        2. Find images that contain ONLY minority classes (pure minority images)
-        3. Find images with minority + majority mix (mixed images)
-        4. Prioritize replicating pure minority images
-        5. Use mixed images only if needed, with lower replication factor
+        Aggressive oversampling of minority classes with strong augmentations.
 
         Args:
             dataset_dir (str): Path to cleaned detection dataset
             target_samples_per_class (int): Target number of samples for minority classes
             minority_threshold (int): Classes below this are considered minority
-            max_replication_factor (int): Maximum replication factor per image
 
         Returns:
             str: Path to oversampled dataset
         """
         print("\n" + "=" * 70)
-        print("SELECTIVE MINORITY CLASS OVERSAMPLING")
+        print("AGGRESSIVE MINORITY CLASS OVERSAMPLING")
         print("=" * 70)
 
+        # Analyze current class distribution
         train_images_dir = os.path.join(dataset_dir, "images", "train")
         train_labels_dir = os.path.join(dataset_dir, "labels", "train")
 
-        # Step 1: Analyze class distribution
+        # Count samples per class
         class_samples = {name: 0 for name in self.class_names}
-        image_metadata = {}  # Store detailed info about each image
+        images_by_class = {name: [] for name in self.class_names}
 
-        print("\nAnalyzing dataset...")
         for img_file in os.listdir(train_images_dir):
             if not img_file.lower().endswith((".jpg", ".jpeg", ".png")):
                 continue
@@ -1253,251 +1241,125 @@ class AdaptiveYOLOv12DetectionTrainer:
             label_file = os.path.splitext(img_file)[0] + ".txt"
             label_path = os.path.join(train_labels_dir, label_file)
 
-            if not os.path.exists(label_path):
-                continue
+            if os.path.exists(label_path):
+                with open(label_path, "r") as f:
+                    lines = f.readlines()
 
-            with open(label_path, "r") as f:
-                lines = f.readlines()
+                # Track which classes are in this image
+                classes_in_image = set()
+                for line in lines:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        class_id = int(parts[0])
+                        if class_id < len(self.class_names):
+                            class_name = self.class_names[class_id]
+                            class_samples[class_name] += 1
+                            classes_in_image.add(class_name)
 
-            # Analyze this image
-            classes_in_image = {}
-            for line in lines:
-                parts = line.strip().split()
-                if len(parts) >= 5:
-                    class_id = int(parts[0])
-                    if class_id < len(self.class_names):
-                        class_name = self.class_names[class_id]
-                        classes_in_image[class_name] = classes_in_image.get(class_name, 0) + 1
-                        class_samples[class_name] += 1
+                # Add image to all classes it contains
+                for class_name in classes_in_image:
+                    images_by_class[class_name].append(img_file)
 
-            # Store metadata
-            if classes_in_image:
-                image_metadata[img_file] = {
-                    "classes": set(classes_in_image.keys()),
-                    "class_counts": classes_in_image,
-                    "total_objects": sum(classes_in_image.values()),
-                }
-
-        # Step 2: Identify minority and majority classes
-        minority_classes = set()
-        majority_classes = set()
-
-        print("\nClass distribution:")
-        print(f"{'Class':<20} {'Samples':<10} {'Status':<15}")
+        # Display current distribution
+        print("\nCurrent class distribution:")
+        print(f"{'Class':<20} {'Samples':<10} {'Images':<10} {'Status':<15}")
         print("-" * 70)
 
+        minority_classes = []
         for class_name in self.class_names:
             samples = class_samples[class_name]
-            if samples == 0:
-                status = "NO SAMPLES"
-            elif samples < minority_threshold:
-                status = "MINORITY"
-                minority_classes.add(class_name)
-            else:
-                status = "MAJORITY"
-                majority_classes.add(class_name)
+            images = len(images_by_class[class_name])
+            status = "MINORITY" if samples < minority_threshold else "OK"
 
-            print(f"{class_name:<20} {samples:<10} {status:<15}")
+            print(f"{class_name:<20} {samples:<10} {images:<10} {status:<15}")
+
+            if samples < minority_threshold and samples > 0:
+                minority_classes.append(class_name)
 
         if not minority_classes:
             print("\nNo minority classes found. Skipping oversampling.")
             return dataset_dir
 
-        print(f"\nMinority classes: {sorted(minority_classes)}")
-        print(f"Majority classes: {sorted(majority_classes)}")
+        print(f"\nMinority classes to oversample: {minority_classes}")
 
-        # Step 3: Categorize images
-        pure_minority_images = {}  # Images with ONLY minority classes
-        mixed_images = {}  # Images with minority + majority
-
-        for img_file, metadata in image_metadata.items():
-            img_classes = metadata["classes"]
-            minority_in_image = img_classes & minority_classes
-            majority_in_image = img_classes & majority_classes
-
-            if minority_in_image and not majority_in_image:
-                # Pure minority image
-                for minority_class in minority_in_image:
-                    if minority_class not in pure_minority_images:
-                        pure_minority_images[minority_class] = []
-                    pure_minority_images[minority_class].append(img_file)
-
-            elif minority_in_image and majority_in_image:
-                # Mixed image
-                for minority_class in minority_in_image:
-                    if minority_class not in mixed_images:
-                        mixed_images[minority_class] = []
-                    mixed_images[minority_class].append(img_file)
-
-        # Step 4: Calculate selective replication strategy
-        print("\n" + "=" * 70)
-        print("REPLICATION STRATEGY")
-        print("=" * 70)
-
+        # Calculate replication factors
         replication_plan = {}
-
         for class_name in minority_classes:
             current_samples = class_samples[class_name]
-            target = min(target_samples_per_class, current_samples * max_replication_factor)
-            gap = target - current_samples
-
-            pure_imgs = pure_minority_images.get(class_name, [])
-            mixed_imgs = mixed_images.get(class_name, [])
-
-            # Calculate how many samples each pure image contributes
-            samples_per_pure_img = 0
-            for img in pure_imgs:
-                samples_per_pure_img += image_metadata[img]["class_counts"].get(class_name, 0)
-
-            # Strategy: prioritize pure minority images with higher replication
-            if pure_imgs:
-                # Replicate pure images more aggressively
-                pure_factor = min(
-                    max_replication_factor, max(2, int(gap / (samples_per_pure_img + 1)))
-                )
-                mixed_factor = min(max_replication_factor // 2, 2)  # Lower factor for mixed
-            else:
-                # No pure images, use mixed only
-                pure_factor = 0
-                mixed_factor = min(max_replication_factor, max(2, int(gap / current_samples)))
-
+            target = min(target_samples_per_class, current_samples * 10)  # Cap at 10x
+            replication_factor = max(2, int(target / current_samples))
             replication_plan[class_name] = {
-                "current_samples": current_samples,
-                "target_samples": target,
-                "gap": gap,
-                "pure_images": pure_imgs,
-                "mixed_images": mixed_imgs,
-                "pure_factor": pure_factor,
-                "mixed_factor": mixed_factor,
-                "strategy": "pure_priority" if pure_imgs else "mixed_only",
+                "current": current_samples,
+                "target": target,
+                "factor": replication_factor,
+                "images": images_by_class[class_name],
             }
 
-            print(f"\n{class_name}:")
-            print(f"  Current samples: {current_samples}")
-            print(f"  Target samples: {target}")
-            print(f"  Gap: {gap}")
-            print(f"  Pure minority images: {len(pure_imgs)} (replication: {pure_factor}x)")
-            print(f"  Mixed images: {len(mixed_imgs)} (replication: {mixed_factor}x)")
-            print(f"  Strategy: {replication_plan[class_name]['strategy']}")
+        print("\nOversampling plan:")
+        for class_name, plan in replication_plan.items():
+            print(
+                f"  {class_name}: {plan['current']} → ~{plan['target']} "
+                f"({plan['factor']}x, {len(plan['images'])} images)"
+            )
 
-        # Step 5: Create oversampled dataset
-        print("\n" + "=" * 70)
-        print("CREATING OVERSAMPLED DATASET")
-        print("=" * 70)
-
+        # Create oversampled dataset
         oversampled_dir = dataset_dir + "_oversampled"
         if os.path.exists(oversampled_dir):
-            print(f"Removing existing oversampled directory...")
+            print(f"\nRemoving existing oversampled directory: {oversampled_dir}")
             shutil.rmtree(oversampled_dir)
 
-        print("Copying original dataset...")
+        # Copy original dataset structure
+        print("\nCopying original dataset...")
         shutil.copytree(dataset_dir, oversampled_dir)
 
         oversampled_images_dir = os.path.join(oversampled_dir, "images", "train")
         oversampled_labels_dir = os.path.join(oversampled_dir, "labels", "train")
 
-        # Step 6: Apply selective oversampling
-        print("\nApplying selective augmentation...")
+        # Apply oversampling with augmentations
+        print("\nApplying oversampling with strong augmentations...")
 
         total_augmented = 0
-        augmentation_stats = {
-            class_name: {"pure": 0, "mixed": 0} for class_name in minority_classes
-        }
-
         for class_name, plan in replication_plan.items():
             print(f"\nProcessing {class_name}...")
+            class_augmented = 0
 
-            # Process pure minority images (high priority)
-            if plan["pure_images"] and plan["pure_factor"] > 1:
-                print(f"  Augmenting {len(plan['pure_images'])} pure minority images...")
-                for img_file in plan["pure_images"]:
-                    img_path = os.path.join(train_images_dir, img_file)
-                    label_file = os.path.splitext(img_file)[0] + ".txt"
-                    label_path = os.path.join(train_labels_dir, label_file)
+            for img_file in plan["images"]:
+                img_path = os.path.join(train_images_dir, img_file)
+                label_file = os.path.splitext(img_file)[0] + ".txt"
+                label_path = os.path.join(train_labels_dir, label_file)
 
-                    # Create (factor - 1) augmented versions
-                    for aug_idx in range(plan["pure_factor"] - 1):
-                        try:
-                            aug_img, aug_labels = self._apply_strong_augmentation(
-                                img_path, label_path
-                            )
+                # Create (factor - 1) augmented versions (original already copied)
+                for aug_idx in range(plan["factor"] - 1):
+                    try:
+                        # Apply strong augmentation
+                        aug_img, aug_labels = self._apply_strong_augmentation(img_path, label_path)
 
-                            base_name = os.path.splitext(img_file)[0]
-                            aug_img_name = f"{base_name}_pure_{class_name}_{aug_idx}.jpg"
-                            aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
+                        # Save augmented image
+                        base_name = os.path.splitext(img_file)[0]
+                        aug_img_name = f"{base_name}_aug_{class_name}_{aug_idx}.jpg"
+                        aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
 
-                            cv2.imwrite(aug_img_path, aug_img)
+                        cv2.imwrite(aug_img_path, aug_img)
 
-                            aug_label_name = f"{base_name}_pure_{class_name}_{aug_idx}.txt"
-                            aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
+                        # Save augmented labels
+                        aug_label_name = f"{base_name}_aug_{class_name}_{aug_idx}.txt"
+                        aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
 
-                            with open(aug_label_path, "w") as f:
-                                f.writelines(aug_labels)
+                        with open(aug_label_path, "w") as f:
+                            f.writelines(aug_labels)
 
-                            augmentation_stats[class_name]["pure"] += 1
-                            total_augmented += 1
+                        class_augmented += 1
+                        total_augmented += 1
 
-                        except Exception as e:
-                            print(f"    Warning: Failed to augment {img_file}: {e}")
+                    except Exception as e:
+                        print(f"  Warning: Failed to augment {img_file}: {e}")
+                        continue
 
-            # Process mixed images (lower priority, lower factor)
-            if plan["mixed_images"] and plan["mixed_factor"] > 1:
-                # Limit number of mixed images to use
-                max_mixed_to_use = min(len(plan["mixed_images"]), len(plan["pure_images"]) * 2 + 10)
-                mixed_to_use = plan["mixed_images"][:max_mixed_to_use]
+            print(f"  Created {class_augmented} augmented images for {class_name}")
 
-                print(
-                    f"  Augmenting {len(mixed_to_use)} mixed images (selected from {len(plan['mixed_images'])})..."
-                )
-                for img_file in mixed_to_use:
-                    img_path = os.path.join(train_images_dir, img_file)
-                    label_file = os.path.splitext(img_file)[0] + ".txt"
-                    label_path = os.path.join(train_labels_dir, label_file)
-
-                    # Create fewer augmented versions for mixed images
-                    for aug_idx in range(plan["mixed_factor"] - 1):
-                        try:
-                            aug_img, aug_labels = self._apply_strong_augmentation(
-                                img_path, label_path
-                            )
-
-                            base_name = os.path.splitext(img_file)[0]
-                            aug_img_name = f"{base_name}_mixed_{class_name}_{aug_idx}.jpg"
-                            aug_img_path = os.path.join(oversampled_images_dir, aug_img_name)
-
-                            cv2.imwrite(aug_img_path, aug_img)
-
-                            aug_label_name = f"{base_name}_mixed_{class_name}_{aug_idx}.txt"
-                            aug_label_path = os.path.join(oversampled_labels_dir, aug_label_name)
-
-                            with open(aug_label_path, "w") as f:
-                                f.writelines(aug_labels)
-
-                            augmentation_stats[class_name]["mixed"] += 1
-                            total_augmented += 1
-
-                        except Exception as e:
-                            print(f"    Warning: Failed to augment {img_file}: {e}")
-
-            print(
-                f"  Created: {augmentation_stats[class_name]['pure']} pure + "
-                f"{augmentation_stats[class_name]['mixed']} mixed augmentations"
-            )
-
-        # Step 7: Generate report
-        print("\n" + "=" * 70)
-        print("OVERSAMPLING SUMMARY")
-        print("=" * 70)
-        print(f"Total augmented images: {total_augmented}")
-        print(f"Oversampled dataset: {oversampled_dir}")
-
-        print("\nAugmentation breakdown:")
-        for class_name in minority_classes:
-            stats = augmentation_stats[class_name]
-            print(
-                f"  {class_name}: {stats['pure']} pure + {stats['mixed']} mixed = "
-                f"{stats['pure'] + stats['mixed']} total"
-            )
+        print(f"\nOversampling complete!")
+        print(f"   Total augmented images: {total_augmented}")
+        print(f"   Oversampled dataset: {oversampled_dir}")
 
         # Update dataset config
         config_path = os.path.join(oversampled_dir, "data.yaml")
@@ -1512,59 +1374,123 @@ class AdaptiveYOLOv12DetectionTrainer:
         with open(config_path, "w") as f:
             yaml.safe_dump(config, f, default_flow_style=False)
 
-        # Generate detailed report
-        self._generate_selective_oversampling_report(
-            dataset_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
+        print(f"   Updated config: {config_path}")
+
+        # Generate oversampling report
+        self._generate_oversampling_report(
+            dataset_dir, oversampled_dir, replication_plan, total_augmented
         )
 
         return oversampled_dir
 
-    def _generate_selective_oversampling_report(
-        self, original_dir, oversampled_dir, replication_plan, augmentation_stats, total_augmented
+    def _apply_strong_augmentation(self, img_path, label_path):
+        """
+        Apply strong augmentations including flips and rotations.
+
+        Args:
+            img_path (str): Path to original image
+            label_path (str): Path to original label file
+
+        Returns:
+            tuple: (augmented_image, augmented_labels)
+        """
+        # Read image
+        img = cv2.imread(img_path)
+        if img is None:
+            raise ValueError(f"Could not read image: {img_path}")
+
+        h, w = img.shape[:2]
+
+        # Read labels
+        with open(label_path, "r") as f:
+            labels = f.readlines()
+
+        # Parse labels
+        boxes = []
+        for line in labels:
+            parts = line.strip().split()
+            if len(parts) >= 5:
+                class_id = int(parts[0])
+                cx, cy, bw, bh = map(float, parts[1:5])
+                boxes.append([class_id, cx, cy, bw, bh])
+
+        # Randomly select augmentation
+        aug_type = np.random.choice(
+            ["horizontal_flip", "vertical_flip", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
+        )
+
+        # Apply augmentation
+        if aug_type == "horizontal_flip":
+            img = cv2.flip(img, 1)
+            boxes = [[cls_id, 1.0 - cx, cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "vertical_flip":
+            img = cv2.flip(img, 0)
+            boxes = [[cls_id, cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_90_cw":
+            img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+            # Transform: (cx, cy) -> (cy, 1-cx), swap w and h
+            boxes = [[cls_id, cy, 1.0 - cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_90_ccw":
+            img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+            # Transform: (cx, cy) -> (1-cy, cx), swap w and h
+            boxes = [[cls_id, 1.0 - cy, cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+
+        elif aug_type == "rotate_180":
+            img = cv2.rotate(img, cv2.ROTATE_180)
+            # Transform: (cx, cy) -> (1-cx, 1-cy)
+            boxes = [[cls_id, 1.0 - cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+
+        # Convert boxes back to label format
+        aug_labels = []
+        for cls_id, cx, cy, bw, bh in boxes:
+            # Clip coordinates to valid range
+            cx = np.clip(cx, 0.0, 1.0)
+            cy = np.clip(cy, 0.0, 1.0)
+            bw = np.clip(bw, 0.0, 1.0)
+            bh = np.clip(bh, 0.0, 1.0)
+
+            aug_labels.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+
+        return img, aug_labels
+
+    def _generate_oversampling_report(
+        self, original_dir, oversampled_dir, replication_plan, total_augmented
     ):
         """
-        Generate comprehensive report for selective oversampling.
+        Generate comprehensive oversampling report.
+
+        Args:
+            original_dir (str): Original dataset directory
+            oversampled_dir (str): Oversampled dataset directory
+            replication_plan (dict): Replication plan details
+            total_augmented (int): Total number of augmented images
         """
-        report_path = os.path.join(self.save_dir, "selective_oversampling_report.txt")
+        report_path = os.path.join(self.save_dir, "oversampling_report.txt")
 
         with open(report_path, "w") as f:
             f.write("=" * 70 + "\n")
-            f.write("SELECTIVE OVERSAMPLING REPORT\n")
+            f.write("OVERSAMPLING REPORT\n")
             f.write("=" * 70 + "\n\n")
 
             f.write(f"Original dataset: {original_dir}\n")
             f.write(f"Oversampled dataset: {oversampled_dir}\n")
             f.write(f"Total augmented images: {total_augmented}\n\n")
 
-            f.write("Strategy: Selective minority oversampling\n")
-            f.write("  - Pure minority images: High replication factor\n")
-            f.write("  - Mixed images: Lower replication factor (conservative)\n\n")
-
-            f.write("Replication details:\n")
+            f.write("Replication plan:\n")
             f.write("-" * 70 + "\n")
             f.write(
-                f"{'Class':<15} {'Current':<10} {'Target':<10} {'Pure Imgs':<12} "
-                f"{'Mixed Imgs':<12} {'Strategy':<15}\n"
+                f"{'Class':<20} {'Original':<12} {'Target':<12} {'Factor':<10} {'Images':<10}\n"
             )
             f.write("-" * 70 + "\n")
 
             for class_name, plan in replication_plan.items():
                 f.write(
-                    f"{class_name:<15} {plan['current_samples']:<10} "
-                    f"{plan['target_samples']:<10} "
-                    f"{len(plan['pure_images'])}x{plan['pure_factor']:<8} "
-                    f"{len(plan['mixed_images'])}x{plan['mixed_factor']:<8} "
-                    f"{plan['strategy']:<15}\n"
+                    f"{class_name:<20} {plan['current']:<12} {plan['target']:<12} "
+                    f"{plan['factor']:<10} {len(plan['images']):<10}\n"
                 )
-
-            f.write("\nAugmentation statistics:\n")
-            f.write("-" * 70 + "\n")
-            f.write(f"{'Class':<15} {'Pure Augs':<12} {'Mixed Augs':<12} {'Total':<10}\n")
-            f.write("-" * 70 + "\n")
-
-            for class_name, stats in augmentation_stats.items():
-                total = stats["pure"] + stats["mixed"]
-                f.write(f"{class_name:<15} {stats['pure']:<12} {stats['mixed']:<12} {total:<10}\n")
 
             f.write("\n" + "=" * 70 + "\n")
             f.write("Augmentation types applied:\n")
@@ -1575,210 +1501,507 @@ class AdaptiveYOLOv12DetectionTrainer:
             f.write("  - 180 degree rotation (upside down)\n")
             f.write("=" * 70 + "\n")
 
-        print(f"Detailed report saved: {report_path}")
+        print(f"\nOversampling report saved: {report_path}")
 
-        def _apply_strong_augmentation(self, img_path, label_path):
-            """
-            Apply strong augmentations including flips and rotations.
+    def generate_custom_confusion_matrix(
+        self,
+        model_path,
+        config_path,
+        conf_threshold=0.3,
+        iou_threshold=0.5,
+        match_iou_threshold=0.5,
+        save_visualizations=True,
+    ):
+        """
+        Generate custom confusion matrix with user-defined parameters.
 
-            Args:
-                img_path (str): Path to original image
-                label_path (str): Path to original label file
+        Args:
+            model_path (str): Path to trained model
+            config_path (str): Path to dataset config
+            conf_threshold (float): Confidence threshold for predictions
+            iou_threshold (float): IoU threshold for NMS
+            match_iou_threshold (float): IoU threshold to match predictions with ground truth
+            save_visualizations (bool): Save confusion matrix plots
 
-            Returns:
-                tuple: (augmented_image, augmented_labels)
-            """
-            # Read image
+        Returns:
+            dict: Confusion matrix results and metrics
+        """
+        print("\n" + "=" * 70)
+        print("CUSTOM CONFUSION MATRIX GENERATION")
+        print("=" * 70)
+        print(f"Parameters:")
+        print(f"  Confidence threshold: {conf_threshold}")
+        print(f"  NMS IoU threshold: {iou_threshold}")
+        print(f"  Match IoU threshold: {match_iou_threshold}")
+
+        # Load model
+        print(f"\nLoading model: {model_path}")
+        model = YOLO(model_path)
+
+        # Load dataset config
+        with open(config_path, "r") as f:
+            data_config = yaml.safe_load(f)
+
+        dataset_path = data_config["path"]
+        val_images_dir = os.path.join(
+            dataset_path, data_config["val"], "" if "images" in data_config["val"] else "../images"
+        )
+        val_labels_dir = val_images_dir.replace("images", "labels")
+
+        print(f"Validation images: {val_images_dir}")
+        print(f"Validation labels: {val_labels_dir}")
+
+        # Initialize confusion matrix
+        num_classes = len(self.class_names)
+        confusion_matrix_data = np.zeros((num_classes + 1, num_classes + 1), dtype=np.int32)
+        # Rows: Ground truth (+ background class at end)
+        # Cols: Predictions (+ background class at end)
+
+        class_names_with_bg = self.class_names + ["Background"]
+
+        # Process each validation image
+        print(f"\nProcessing validation images...")
+        total_gt_boxes = 0
+        total_pred_boxes = 0
+        matched_predictions = 0
+
+        val_images = [
+            f for f in os.listdir(val_images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
+        ]
+
+        for idx, img_file in enumerate(val_images):
+            if (idx + 1) % 50 == 0:
+                print(f"  Processed {idx + 1}/{len(val_images)} images...")
+
+            img_path = os.path.join(val_images_dir, img_file)
+            label_file = os.path.splitext(img_file)[0] + ".txt"
+            label_path = os.path.join(val_labels_dir, label_file)
+
+            # Load image to get dimensions
             img = cv2.imread(img_path)
             if img is None:
-                raise ValueError(f"Could not read image: {img_path}")
-
+                continue
             h, w = img.shape[:2]
 
-            # Read labels
-            with open(label_path, "r") as f:
-                labels = f.readlines()
+            # Load ground truth
+            gt_boxes = self._load_ground_truth_boxes(label_path, w, h)
+            total_gt_boxes += len(gt_boxes)
 
-            # Parse labels
-            boxes = []
-            for line in labels:
-                parts = line.strip().split()
-                if len(parts) >= 5:
-                    class_id = int(parts[0])
-                    cx, cy, bw, bh = map(float, parts[1:5])
-                    boxes.append([class_id, cx, cy, bw, bh])
-
-            # Randomly select augmentation
-            aug_type = np.random.choice(
-                ["horizontal_flip", "vertical_flip", "rotate_90_cw", "rotate_90_ccw", "rotate_180"]
+            # Run prediction
+            results = model.predict(
+                source=img_path, conf=conf_threshold, iou=iou_threshold, verbose=False
             )
 
-            # Apply augmentation
-            if aug_type == "horizontal_flip":
-                img = cv2.flip(img, 1)
-                boxes = [[cls_id, 1.0 - cx, cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+            # Extract predictions
+            pred_boxes = self._extract_predictions(results[0], w, h)
+            total_pred_boxes += len(pred_boxes)
 
-            elif aug_type == "vertical_flip":
-                img = cv2.flip(img, 0)
-                boxes = [[cls_id, cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+            # Match predictions to ground truth
+            matches = self._match_boxes(gt_boxes, pred_boxes, match_iou_threshold)
+            matched_predictions += len(matches["matched"])
 
-            elif aug_type == "rotate_90_cw":
-                img = cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
-                # Transform: (cx, cy) -> (cy, 1-cx), swap w and h
-                boxes = [[cls_id, cy, 1.0 - cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+            # Update confusion matrix
+            self._update_confusion_matrix(
+                confusion_matrix_data, gt_boxes, pred_boxes, matches, num_classes
+            )
 
-            elif aug_type == "rotate_90_ccw":
-                img = cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                # Transform: (cx, cy) -> (1-cy, cx), swap w and h
-                boxes = [[cls_id, 1.0 - cy, cx, bh, bw] for cls_id, cx, cy, bw, bh in boxes]
+        print(f"\nProcessing complete!")
+        print(f"  Total ground truth boxes: {total_gt_boxes}")
+        print(f"  Total predicted boxes: {total_pred_boxes}")
+        print(f"  Matched predictions: {matched_predictions}")
 
-            elif aug_type == "rotate_180":
-                img = cv2.rotate(img, cv2.ROTATE_180)
-                # Transform: (cx, cy) -> (1-cx, 1-cy)
-                boxes = [[cls_id, 1.0 - cx, 1.0 - cy, bw, bh] for cls_id, cx, cy, bw, bh in boxes]
+        # Calculate metrics
+        metrics = self._calculate_confusion_metrics(confusion_matrix_data, class_names_with_bg)
 
-            # Convert boxes back to label format
-            aug_labels = []
-            for cls_id, cx, cy, bw, bh in boxes:
-                # Clip coordinates to valid range
-                cx = np.clip(cx, 0.0, 1.0)
-                cy = np.clip(cy, 0.0, 1.0)
-                bw = np.clip(bw, 0.0, 1.0)
-                bh = np.clip(bh, 0.0, 1.0)
+        # Print summary
+        self._print_confusion_summary(confusion_matrix_data, class_names_with_bg, metrics)
 
-                aug_labels.append(f"{cls_id} {cx:.6f} {cy:.6f} {bw:.6f} {bh:.6f}\n")
+        # Save visualizations
+        if save_visualizations:
+            self._save_confusion_visualizations(
+                confusion_matrix_data,
+                class_names_with_bg,
+                metrics,
+                conf_threshold,
+                iou_threshold,
+                match_iou_threshold,
+            )
 
-            return img, aug_labels
-
-
-def generate_custom_confusion_matrix(
-    self,
-    model_path,
-    config_path,
-    conf_threshold=0.3,
-    iou_threshold=0.5,
-    match_iou_threshold=0.5,
-    save_visualizations=True,
-):
-    """
-    Generate custom confusion matrix with user-defined parameters.
-
-    Args:
-        model_path (str): Path to trained model
-        config_path (str): Path to dataset config
-        conf_threshold (float): Confidence threshold for predictions
-        iou_threshold (float): IoU threshold for NMS
-        match_iou_threshold (float): IoU threshold to match predictions with ground truth
-        save_visualizations (bool): Save confusion matrix plots
-
-    Returns:
-        dict: Confusion matrix results and metrics
-    """
-    print("\n" + "=" * 70)
-    print("CUSTOM CONFUSION MATRIX GENERATION")
-    print("=" * 70)
-    print(f"Parameters:")
-    print(f"  Confidence threshold: {conf_threshold}")
-    print(f"  NMS IoU threshold: {iou_threshold}")
-    print(f"  Match IoU threshold: {match_iou_threshold}")
-
-    # Load model
-    print(f"\nLoading model: {model_path}")
-    model = YOLO(model_path)
-
-    # Load dataset config
-    with open(config_path, "r") as f:
-        data_config = yaml.safe_load(f)
-
-    dataset_path = data_config["path"]
-    val_images_dir = os.path.join(
-        dataset_path, data_config["val"], "" if "images" in data_config["val"] else "../images"
-    )
-    val_labels_dir = val_images_dir.replace("images", "labels")
-
-    print(f"Validation images: {val_images_dir}")
-    print(f"Validation labels: {val_labels_dir}")
-
-    # Initialize confusion matrix
-    num_classes = len(self.class_names)
-    confusion_matrix_data = np.zeros((num_classes + 1, num_classes + 1), dtype=np.int32)
-    # Rows: Ground truth (+ background class at end)
-    # Cols: Predictions (+ background class at end)
-
-    class_names_with_bg = self.class_names + ["Background"]
-
-    # Process each validation image
-    print(f"\nProcessing validation images...")
-    total_gt_boxes = 0
-    total_pred_boxes = 0
-    matched_predictions = 0
-
-    val_images = [
-        f for f in os.listdir(val_images_dir) if f.lower().endswith((".jpg", ".jpeg", ".png"))
-    ]
-
-    for idx, img_file in enumerate(val_images):
-        if (idx + 1) % 50 == 0:
-            print(f"  Processed {idx + 1}/{len(val_images)} images...")
-
-        img_path = os.path.join(val_images_dir, img_file)
-        label_file = os.path.splitext(img_file)[0] + ".txt"
-        label_path = os.path.join(val_labels_dir, label_file)
-
-        # Load image to get dimensions
-        img = cv2.imread(img_path)
-        if img is None:
-            continue
-        h, w = img.shape[:2]
-
-        # Load ground truth
-        gt_boxes = self._load_ground_truth_boxes(label_path, w, h)
-        total_gt_boxes += len(gt_boxes)
-
-        # Run prediction
-        results = model.predict(
-            source=img_path, conf=conf_threshold, iou=iou_threshold, verbose=False
-        )
-
-        # Extract predictions
-        pred_boxes = self._extract_predictions(results[0], w, h)
-        total_pred_boxes += len(pred_boxes)
-
-        # Match predictions to ground truth
-        matches = self._match_boxes(gt_boxes, pred_boxes, match_iou_threshold)
-        matched_predictions += len(matches["matched"])
-
-        # Update confusion matrix
-        self._update_confusion_matrix(
-            confusion_matrix_data, gt_boxes, pred_boxes, matches, num_classes
-        )
-
-    print(f"\nProcessing complete!")
-    print(f"  Total ground truth boxes: {total_gt_boxes}")
-    print(f"  Total predicted boxes: {total_pred_boxes}")
-    print(f"  Matched predictions: {matched_predictions}")
-
-    # Calculate metrics
-    metrics = self._calculate_confusion_metrics(confusion_matrix_data, class_names_with_bg)
-
-    # Print summary
-    self._print_confusion_summary(confusion_matrix_data, class_names_with_bg, metrics)
-
-    # Save visualizations
-    if save_visualizations:
-        self._save_confusion_visualizations(
+        # Save detailed report
+        self._save_confusion_report(
             confusion_matrix_data,
             class_names_with_bg,
             metrics,
             conf_threshold,
             iou_threshold,
             match_iou_threshold,
+            total_gt_boxes,
+            total_pred_boxes,
+            matched_predictions,
         )
 
-    # Save detailed report
-    self._save_confusion_report(
-        confusion_matrix_data,
-        class_names_with_bg,
+        return {
+            "confusion_matrix": confusion_matrix_data,
+            "class_names": class_names_with_bg,
+            "metrics": metrics,
+            "total_gt_boxes": total_gt_boxes,
+            "total_pred_boxes": total_pred_boxes,
+            "matched_predictions": matched_predictions,
+        }
+
+    def _load_ground_truth_boxes(self, label_path, img_w, img_h):
+        """
+        Load ground truth boxes from YOLO label file.
+
+        Returns:
+            list: List of dicts with box info
+        """
+        boxes = []
+
+        if not os.path.exists(label_path):
+            return boxes
+
+        try:
+            with open(label_path, "r") as f:
+                lines = f.readlines()
+
+            for line in lines:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    class_id = int(parts[0])
+                    cx, cy, w, h = map(float, parts[1:5])
+
+                    # Convert to absolute coordinates
+                    x1 = int((cx - w / 2) * img_w)
+                    y1 = int((cy - h / 2) * img_h)
+                    x2 = int((cx + w / 2) * img_w)
+                    y2 = int((cy + h / 2) * img_h)
+
+                    boxes.append({"class_id": class_id, "bbox": [x1, y1, x2, y2], "matched": False})
+        except Exception as e:
+            print(f"Warning: Error loading labels from {label_path}: {e}")
+
+        return boxes
+
+    def _extract_predictions(self, result, img_w, img_h):
+        """
+        Extract predictions from YOLO result object.
+
+        Returns:
+            list: List of dicts with prediction info
+        """
+        predictions = []
+
+        if result.boxes is None or len(result.boxes) == 0:
+            return predictions
+
+        boxes = result.boxes
+
+        for i in range(len(boxes)):
+            x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
+            conf = float(boxes.conf[i].cpu().numpy())
+            class_id = int(boxes.cls[i].cpu().numpy())
+
+            predictions.append(
+                {
+                    "class_id": class_id,
+                    "confidence": conf,
+                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
+                    "matched": False,
+                }
+            )
+
+        return predictions
+
+    def _calculate_iou(self, box1, box2):
+        """
+        Calculate IoU between two boxes.
+
+        Args:
+            box1, box2: [x1, y1, x2, y2]
+
+        Returns:
+            float: IoU score
+        """
+        x1_inter = max(box1[0], box2[0])
+        y1_inter = max(box1[1], box2[1])
+        x2_inter = min(box1[2], box2[2])
+        y2_inter = min(box1[3], box2[3])
+
+        if x2_inter < x1_inter or y2_inter < y1_inter:
+            return 0.0
+
+        inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+
+        box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
+
+        union_area = box1_area + box2_area - inter_area
+
+        if union_area == 0:
+            return 0.0
+
+        return inter_area / union_area
+
+    def _match_boxes(self, gt_boxes, pred_boxes, iou_threshold):
+        """
+        Match predictions to ground truth boxes using IoU threshold.
+
+        Returns:
+            dict: Matching information
+        """
+        matches = {
+            "matched": [],  # (gt_idx, pred_idx, iou, gt_class, pred_class)
+            "unmatched_gt": [],  # gt_idx
+            "unmatched_pred": [],  # pred_idx
+        }
+
+        if len(gt_boxes) == 0 or len(pred_boxes) == 0:
+            matches["unmatched_gt"] = list(range(len(gt_boxes)))
+            matches["unmatched_pred"] = list(range(len(pred_boxes)))
+            return matches
+
+        # Calculate IoU matrix
+        iou_matrix = np.zeros((len(gt_boxes), len(pred_boxes)))
+
+        for i, gt_box in enumerate(gt_boxes):
+            for j, pred_box in enumerate(pred_boxes):
+                iou_matrix[i, j] = self._calculate_iou(gt_box["bbox"], pred_box["bbox"])
+
+        # Greedy matching: find best matches first
+        gt_matched = [False] * len(gt_boxes)
+        pred_matched = [False] * len(pred_boxes)
+
+        # Sort all possible matches by IoU (descending)
+        match_candidates = []
+        for i in range(len(gt_boxes)):
+            for j in range(len(pred_boxes)):
+                if iou_matrix[i, j] >= iou_threshold:
+                    match_candidates.append((i, j, iou_matrix[i, j]))
+
+        match_candidates.sort(key=lambda x: x[2], reverse=True)
+
+        # Assign matches greedily
+        for gt_idx, pred_idx, iou in match_candidates:
+            if not gt_matched[gt_idx] and not pred_matched[pred_idx]:
+                matches["matched"].append(
+                    {
+                        "gt_idx": gt_idx,
+                        "pred_idx": pred_idx,
+                        "iou": iou,
+                        "gt_class": gt_boxes[gt_idx]["class_id"],
+                        "pred_class": pred_boxes[pred_idx]["class_id"],
+                    }
+                )
+                gt_matched[gt_idx] = True
+                pred_matched[pred_idx] = True
+
+        # Record unmatched
+        for i, matched in enumerate(gt_matched):
+            if not matched:
+                matches["unmatched_gt"].append(i)
+
+        for j, matched in enumerate(pred_matched):
+            if not matched:
+                matches["unmatched_pred"].append(j)
+
+        return matches
+
+    def _update_confusion_matrix(self, cm, gt_boxes, pred_boxes, matches, num_classes):
+        """
+        Update confusion matrix based on matches.
+
+        Confusion matrix structure:
+        - Rows: Ground truth classes (+ background)
+        - Cols: Predicted classes (+ background)
+        """
+        # Process matched boxes
+        for match in matches["matched"]:
+            gt_class = match["gt_class"]
+            pred_class = match["pred_class"]
+
+            if gt_class < num_classes and pred_class < num_classes:
+                cm[gt_class, pred_class] += 1
+
+        # Process unmatched ground truth (false negatives -> predicted as background)
+        for gt_idx in matches["unmatched_gt"]:
+            gt_class = gt_boxes[gt_idx]["class_id"]
+            if gt_class < num_classes:
+                cm[gt_class, num_classes] += 1  # GT class predicted as background
+
+        # Process unmatched predictions (false positives -> background predicted as class)
+        for pred_idx in matches["unmatched_pred"]:
+            pred_class = pred_boxes[pred_idx]["class_id"]
+            if pred_class < num_classes:
+                cm[num_classes, pred_class] += 1  # Background predicted as class
+
+    def _calculate_confusion_metrics(self, cm, class_names):
+        """
+        Calculate per-class metrics from confusion matrix.
+
+        Returns:
+            dict: Metrics per class
+        """
+        num_classes = len(class_names) - 1  # Exclude background
+        metrics = {}
+
+        for i in range(num_classes):
+            class_name = class_names[i]
+
+            # True positives: diagonal element
+            tp = cm[i, i]
+
+            # False positives: column sum - diagonal
+            fp = np.sum(cm[:, i]) - tp
+
+            # False negatives: row sum - diagonal
+            fn = np.sum(cm[i, :]) - tp
+
+            # Calculate metrics
+            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+            f1 = (
+                2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            )
+
+            metrics[class_name] = {
+                "tp": int(tp),
+                "fp": int(fp),
+                "fn": int(fn),
+                "precision": precision,
+                "recall": recall,
+                "f1": f1,
+            }
+
+        return metrics
+
+    def _print_confusion_summary(self, cm, class_names, metrics):
+        """
+        Print confusion matrix summary.
+        """
+        print("\n" + "=" * 70)
+        print("CONFUSION MATRIX METRICS")
+        print("=" * 70)
+        print(
+            f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}"
+        )
+        print("-" * 70)
+
+        for class_name, m in metrics.items():
+            print(
+                f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
+                f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}"
+            )
+
+        # Overall metrics
+        total_tp = sum(m["tp"] for m in metrics.values())
+        total_fp = sum(m["fp"] for m in metrics.values())
+        total_fn = sum(m["fn"] for m in metrics.values())
+
+        overall_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
+        overall_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
+        overall_f1 = (
+            2 * (overall_precision * overall_recall) / (overall_precision + overall_recall)
+            if (overall_precision + overall_recall) > 0
+            else 0.0
+        )
+
+        print("-" * 70)
+        print(
+            f"{'OVERALL':<20} {total_tp:<8} {total_fp:<8} {total_fn:<8} "
+            f"{overall_precision:<12.3f} {overall_recall:<12.3f} {overall_f1:<12.3f}"
+        )
+
+    def _save_confusion_visualizations(
+        self, cm, class_names, metrics, conf_threshold, iou_threshold, match_iou_threshold
+    ):
+        """
+        Save confusion matrix visualizations.
+        """
+        save_dir = os.path.join(self.save_dir, "custom_confusion_matrix")
+        os.makedirs(save_dir, exist_ok=True)
+
+        # 1. Full confusion matrix heatmap
+        plt.figure(figsize=(14, 12))
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=class_names,
+            yticklabels=class_names,
+            cbar_kws={"label": "Count"},
+        )
+        plt.title(
+            f"Confusion Matrix\nConf={conf_threshold}, IoU={iou_threshold}, Match IoU={match_iou_threshold}"
+        )
+        plt.ylabel("Ground Truth")
+        plt.xlabel("Predicted")
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(save_dir, "confusion_matrix_full.png"), dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # 2. Normalized confusion matrix (by ground truth)
+        cm_normalized = cm.astype("float")
+        row_sums = cm_normalized.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1  # Avoid division by zero
+        cm_normalized = cm_normalized / row_sums
+
+        plt.figure(figsize=(14, 12))
+        sns.heatmap(
+            cm_normalized,
+            annot=True,
+            fmt=".2f",
+            cmap="Blues",
+            xticklabels=class_names,
+            yticklabels=class_names,
+            cbar_kws={"label": "Percentage"},
+        )
+        plt.title(
+            f"Normalized Confusion Matrix (by Ground Truth)\nConf={conf_threshold}, IoU={iou_threshold}"
+        )
+        plt.ylabel("Ground Truth")
+        plt.xlabel("Predicted")
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(save_dir, "confusion_matrix_normalized.png"), dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # 3. Metrics bar plot
+        class_names_only = [name for name in class_names if name != "Background"]
+        precisions = [metrics[name]["precision"] for name in class_names_only]
+        recalls = [metrics[name]["recall"] for name in class_names_only]
+        f1_scores = [metrics[name]["f1"] for name in class_names_only]
+
+        x = np.arange(len(class_names_only))
+        width = 0.25
+
+        fig, ax = plt.subplots(figsize=(14, 6))
+        ax.bar(x - width, precisions, width, label="Precision", color="skyblue")
+        ax.bar(x, recalls, width, label="Recall", color="lightcoral")
+        ax.bar(x + width, f1_scores, width, label="F1-Score", color="lightgreen")
+
+        ax.set_ylabel("Score")
+        ax.set_title(f"Per-Class Metrics\nConf={conf_threshold}, IoU={iou_threshold}")
+        ax.set_xticks(x)
+        ax.set_xticklabels(class_names_only, rotation=45, ha="right")
+        ax.legend()
+        ax.set_ylim([0, 1.0])
+        ax.grid(axis="y", alpha=0.3)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, "metrics_per_class.png"), dpi=300, bbox_inches="tight")
+        plt.close()
+
+        print(f"\nVisualizations saved to: {save_dir}")
+
+    def _save_confusion_report(
+        self,
+        cm,
+        class_names,
         metrics,
         conf_threshold,
         iou_threshold,
@@ -1786,436 +2009,60 @@ def generate_custom_confusion_matrix(
         total_gt_boxes,
         total_pred_boxes,
         matched_predictions,
-    )
-
-    return {
-        "confusion_matrix": confusion_matrix_data,
-        "class_names": class_names_with_bg,
-        "metrics": metrics,
-        "total_gt_boxes": total_gt_boxes,
-        "total_pred_boxes": total_pred_boxes,
-        "matched_predictions": matched_predictions,
-    }
-
-
-def _load_ground_truth_boxes(self, label_path, img_w, img_h):
-    """
-    Load ground truth boxes from YOLO label file.
-
-    Returns:
-        list: List of dicts with box info
-    """
-    boxes = []
-
-    if not os.path.exists(label_path):
-        return boxes
-
-    try:
-        with open(label_path, "r") as f:
-            lines = f.readlines()
-
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) >= 5:
-                class_id = int(parts[0])
-                cx, cy, w, h = map(float, parts[1:5])
-
-                # Convert to absolute coordinates
-                x1 = int((cx - w / 2) * img_w)
-                y1 = int((cy - h / 2) * img_h)
-                x2 = int((cx + w / 2) * img_w)
-                y2 = int((cy + h / 2) * img_h)
-
-                boxes.append({"class_id": class_id, "bbox": [x1, y1, x2, y2], "matched": False})
-    except Exception as e:
-        print(f"Warning: Error loading labels from {label_path}: {e}")
-
-    return boxes
-
-
-def _extract_predictions(self, result, img_w, img_h):
-    """
-    Extract predictions from YOLO result object.
-
-    Returns:
-        list: List of dicts with prediction info
-    """
-    predictions = []
-
-    if result.boxes is None or len(result.boxes) == 0:
-        return predictions
-
-    boxes = result.boxes
-
-    for i in range(len(boxes)):
-        x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
-        conf = float(boxes.conf[i].cpu().numpy())
-        class_id = int(boxes.cls[i].cpu().numpy())
-
-        predictions.append(
-            {
-                "class_id": class_id,
-                "confidence": conf,
-                "bbox": [int(x1), int(y1), int(x2), int(y2)],
-                "matched": False,
-            }
-        )
-
-    return predictions
-
-
-def _calculate_iou(self, box1, box2):
-    """
-    Calculate IoU between two boxes.
-
-    Args:
-        box1, box2: [x1, y1, x2, y2]
-
-    Returns:
-        float: IoU score
-    """
-    x1_inter = max(box1[0], box2[0])
-    y1_inter = max(box1[1], box2[1])
-    x2_inter = min(box1[2], box2[2])
-    y2_inter = min(box1[3], box2[3])
-
-    if x2_inter < x1_inter or y2_inter < y1_inter:
-        return 0.0
-
-    inter_area = (x2_inter - x1_inter) * (y2_inter - y1_inter)
-
-    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-
-    union_area = box1_area + box2_area - inter_area
-
-    if union_area == 0:
-        return 0.0
-
-    return inter_area / union_area
-
-
-def _match_boxes(self, gt_boxes, pred_boxes, iou_threshold):
-    """
-    Match predictions to ground truth boxes using IoU threshold.
-
-    Returns:
-        dict: Matching information
-    """
-    matches = {
-        "matched": [],  # (gt_idx, pred_idx, iou, gt_class, pred_class)
-        "unmatched_gt": [],  # gt_idx
-        "unmatched_pred": [],  # pred_idx
-    }
-
-    if len(gt_boxes) == 0 or len(pred_boxes) == 0:
-        matches["unmatched_gt"] = list(range(len(gt_boxes)))
-        matches["unmatched_pred"] = list(range(len(pred_boxes)))
-        return matches
-
-    # Calculate IoU matrix
-    iou_matrix = np.zeros((len(gt_boxes), len(pred_boxes)))
-
-    for i, gt_box in enumerate(gt_boxes):
-        for j, pred_box in enumerate(pred_boxes):
-            iou_matrix[i, j] = self._calculate_iou(gt_box["bbox"], pred_box["bbox"])
-
-    # Greedy matching: find best matches first
-    gt_matched = [False] * len(gt_boxes)
-    pred_matched = [False] * len(pred_boxes)
-
-    # Sort all possible matches by IoU (descending)
-    match_candidates = []
-    for i in range(len(gt_boxes)):
-        for j in range(len(pred_boxes)):
-            if iou_matrix[i, j] >= iou_threshold:
-                match_candidates.append((i, j, iou_matrix[i, j]))
-
-    match_candidates.sort(key=lambda x: x[2], reverse=True)
-
-    # Assign matches greedily
-    for gt_idx, pred_idx, iou in match_candidates:
-        if not gt_matched[gt_idx] and not pred_matched[pred_idx]:
-            matches["matched"].append(
-                {
-                    "gt_idx": gt_idx,
-                    "pred_idx": pred_idx,
-                    "iou": iou,
-                    "gt_class": gt_boxes[gt_idx]["class_id"],
-                    "pred_class": pred_boxes[pred_idx]["class_id"],
-                }
-            )
-            gt_matched[gt_idx] = True
-            pred_matched[pred_idx] = True
-
-    # Record unmatched
-    for i, matched in enumerate(gt_matched):
-        if not matched:
-            matches["unmatched_gt"].append(i)
-
-    for j, matched in enumerate(pred_matched):
-        if not matched:
-            matches["unmatched_pred"].append(j)
-
-    return matches
-
-
-def _update_confusion_matrix(self, cm, gt_boxes, pred_boxes, matches, num_classes):
-    """
-    Update confusion matrix based on matches.
-
-    Confusion matrix structure:
-    - Rows: Ground truth classes (+ background)
-    - Cols: Predicted classes (+ background)
-    """
-    # Process matched boxes
-    for match in matches["matched"]:
-        gt_class = match["gt_class"]
-        pred_class = match["pred_class"]
-
-        if gt_class < num_classes and pred_class < num_classes:
-            cm[gt_class, pred_class] += 1
-
-    # Process unmatched ground truth (false negatives -> predicted as background)
-    for gt_idx in matches["unmatched_gt"]:
-        gt_class = gt_boxes[gt_idx]["class_id"]
-        if gt_class < num_classes:
-            cm[gt_class, num_classes] += 1  # GT class predicted as background
-
-    # Process unmatched predictions (false positives -> background predicted as class)
-    for pred_idx in matches["unmatched_pred"]:
-        pred_class = pred_boxes[pred_idx]["class_id"]
-        if pred_class < num_classes:
-            cm[num_classes, pred_class] += 1  # Background predicted as class
-
-
-def _calculate_confusion_metrics(self, cm, class_names):
-    """
-    Calculate per-class metrics from confusion matrix.
-
-    Returns:
-        dict: Metrics per class
-    """
-    num_classes = len(class_names) - 1  # Exclude background
-    metrics = {}
-
-    for i in range(num_classes):
-        class_name = class_names[i]
-
-        # True positives: diagonal element
-        tp = cm[i, i]
-
-        # False positives: column sum - diagonal
-        fp = np.sum(cm[:, i]) - tp
-
-        # False negatives: row sum - diagonal
-        fn = np.sum(cm[i, :]) - tp
-
-        # Calculate metrics
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-        metrics[class_name] = {
-            "tp": int(tp),
-            "fp": int(fp),
-            "fn": int(fn),
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-        }
-
-    return metrics
-
-
-def _print_confusion_summary(self, cm, class_names, metrics):
-    """
-    Print confusion matrix summary.
-    """
-    print("\n" + "=" * 70)
-    print("CONFUSION MATRIX METRICS")
-    print("=" * 70)
-    print(
-        f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}"
-    )
-    print("-" * 70)
-
-    for class_name, m in metrics.items():
-        print(
-            f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
-            f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}"
-        )
-
-    # Overall metrics
-    total_tp = sum(m["tp"] for m in metrics.values())
-    total_fp = sum(m["fp"] for m in metrics.values())
-    total_fn = sum(m["fn"] for m in metrics.values())
-
-    overall_precision = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0.0
-    overall_recall = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0.0
-    overall_f1 = (
-        2 * (overall_precision * overall_recall) / (overall_precision + overall_recall)
-        if (overall_precision + overall_recall) > 0
-        else 0.0
-    )
-
-    print("-" * 70)
-    print(
-        f"{'OVERALL':<20} {total_tp:<8} {total_fp:<8} {total_fn:<8} "
-        f"{overall_precision:<12.3f} {overall_recall:<12.3f} {overall_f1:<12.3f}"
-    )
-
-
-def _save_confusion_visualizations(
-    self, cm, class_names, metrics, conf_threshold, iou_threshold, match_iou_threshold
-):
-    """
-    Save confusion matrix visualizations.
-    """
-    save_dir = os.path.join(self.save_dir, "custom_confusion_matrix")
-    os.makedirs(save_dir, exist_ok=True)
-
-    # 1. Full confusion matrix heatmap
-    plt.figure(figsize=(14, 12))
-    sns.heatmap(
-        cm,
-        annot=True,
-        fmt="d",
-        cmap="Blues",
-        xticklabels=class_names,
-        yticklabels=class_names,
-        cbar_kws={"label": "Count"},
-    )
-    plt.title(
-        f"Confusion Matrix\nConf={conf_threshold}, IoU={iou_threshold}, Match IoU={match_iou_threshold}"
-    )
-    plt.ylabel("Ground Truth")
-    plt.xlabel("Predicted")
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "confusion_matrix_full.png"), dpi=300, bbox_inches="tight")
-    plt.close()
-
-    # 2. Normalized confusion matrix (by ground truth)
-    cm_normalized = cm.astype("float")
-    row_sums = cm_normalized.sum(axis=1, keepdims=True)
-    row_sums[row_sums == 0] = 1  # Avoid division by zero
-    cm_normalized = cm_normalized / row_sums
-
-    plt.figure(figsize=(14, 12))
-    sns.heatmap(
-        cm_normalized,
-        annot=True,
-        fmt=".2f",
-        cmap="Blues",
-        xticklabels=class_names,
-        yticklabels=class_names,
-        cbar_kws={"label": "Percentage"},
-    )
-    plt.title(
-        f"Normalized Confusion Matrix (by Ground Truth)\nConf={conf_threshold}, IoU={iou_threshold}"
-    )
-    plt.ylabel("Ground Truth")
-    plt.xlabel("Predicted")
-    plt.tight_layout()
-    plt.savefig(
-        os.path.join(save_dir, "confusion_matrix_normalized.png"), dpi=300, bbox_inches="tight"
-    )
-    plt.close()
-
-    # 3. Metrics bar plot
-    class_names_only = [name for name in class_names if name != "Background"]
-    precisions = [metrics[name]["precision"] for name in class_names_only]
-    recalls = [metrics[name]["recall"] for name in class_names_only]
-    f1_scores = [metrics[name]["f1"] for name in class_names_only]
-
-    x = np.arange(len(class_names_only))
-    width = 0.25
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(x - width, precisions, width, label="Precision", color="skyblue")
-    ax.bar(x, recalls, width, label="Recall", color="lightcoral")
-    ax.bar(x + width, f1_scores, width, label="F1-Score", color="lightgreen")
-
-    ax.set_ylabel("Score")
-    ax.set_title(f"Per-Class Metrics\nConf={conf_threshold}, IoU={iou_threshold}")
-    ax.set_xticks(x)
-    ax.set_xticklabels(class_names_only, rotation=45, ha="right")
-    ax.legend()
-    ax.set_ylim([0, 1.0])
-    ax.grid(axis="y", alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(save_dir, "metrics_per_class.png"), dpi=300, bbox_inches="tight")
-    plt.close()
-
-    print(f"\nVisualizations saved to: {save_dir}")
-
-
-def _save_confusion_report(
-    self,
-    cm,
-    class_names,
-    metrics,
-    conf_threshold,
-    iou_threshold,
-    match_iou_threshold,
-    total_gt_boxes,
-    total_pred_boxes,
-    matched_predictions,
-):
-    """
-    Save detailed confusion matrix report.
-    """
-    report_path = os.path.join(self.save_dir, "custom_confusion_matrix", "report.txt")
-    os.makedirs(os.path.dirname(report_path), exist_ok=True)
-
-    with open(report_path, "w") as f:
-        f.write("=" * 70 + "\n")
-        f.write("CUSTOM CONFUSION MATRIX REPORT\n")
-        f.write("=" * 70 + "\n\n")
-
-        f.write("Parameters:\n")
-        f.write(f"  Confidence threshold: {conf_threshold}\n")
-        f.write(f"  NMS IoU threshold: {iou_threshold}\n")
-        f.write(f"  Match IoU threshold: {match_iou_threshold}\n\n")
-
-        f.write("Dataset statistics:\n")
-        f.write(f"  Total ground truth boxes: {total_gt_boxes}\n")
-        f.write(f"  Total predicted boxes: {total_pred_boxes}\n")
-        f.write(f"  Matched predictions: {matched_predictions}\n")
-        f.write(f"  Match rate: {matched_predictions/total_pred_boxes*100:.2f}%\n\n")
-
-        f.write("Per-class metrics:\n")
-        f.write("-" * 70 + "\n")
-        f.write(
-            f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}\n"
-        )
-        f.write("-" * 70 + "\n")
-
-        for class_name, m in metrics.items():
+    ):
+        """
+        Save detailed confusion matrix report.
+        """
+        report_path = os.path.join(self.save_dir, "custom_confusion_matrix", "report.txt")
+        os.makedirs(os.path.dirname(report_path), exist_ok=True)
+
+        with open(report_path, "w") as f:
+            f.write("=" * 70 + "\n")
+            f.write("CUSTOM CONFUSION MATRIX REPORT\n")
+            f.write("=" * 70 + "\n\n")
+
+            f.write("Parameters:\n")
+            f.write(f"  Confidence threshold: {conf_threshold}\n")
+            f.write(f"  NMS IoU threshold: {iou_threshold}\n")
+            f.write(f"  Match IoU threshold: {match_iou_threshold}\n\n")
+
+            f.write("Dataset statistics:\n")
+            f.write(f"  Total ground truth boxes: {total_gt_boxes}\n")
+            f.write(f"  Total predicted boxes: {total_pred_boxes}\n")
+            f.write(f"  Matched predictions: {matched_predictions}\n")
+            f.write(f"  Match rate: {matched_predictions/total_pred_boxes*100:.2f}%\n\n")
+
+            f.write("Per-class metrics:\n")
+            f.write("-" * 70 + "\n")
             f.write(
-                f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
-                f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}\n"
+                f"{'Class':<20} {'TP':<8} {'FP':<8} {'FN':<8} {'Precision':<12} {'Recall':<12} {'F1':<12}\n"
             )
+            f.write("-" * 70 + "\n")
 
-        f.write("\n" + "=" * 70 + "\n")
-        f.write("Confusion Matrix:\n")
-        f.write("=" * 70 + "\n\n")
+            for class_name, m in metrics.items():
+                f.write(
+                    f"{class_name:<20} {m['tp']:<8} {m['fp']:<8} {m['fn']:<8} "
+                    f"{m['precision']:<12.3f} {m['recall']:<12.3f} {m['f1']:<12.3f}\n"
+                )
 
-        # Write confusion matrix
-        header = "GT \\ Pred".ljust(20)
-        for name in class_names:
-            header += name[:10].ljust(12)
-        f.write(header + "\n")
-        f.write("-" * 70 + "\n")
+            f.write("\n" + "=" * 70 + "\n")
+            f.write("Confusion Matrix:\n")
+            f.write("=" * 70 + "\n\n")
 
-        for i, gt_name in enumerate(class_names):
-            row = gt_name[:18].ljust(20)
-            for j in range(len(class_names)):
-                row += str(cm[i, j]).ljust(12)
-            f.write(row + "\n")
+            # Write confusion matrix
+            header = "GT \\ Pred".ljust(20)
+            for name in class_names:
+                header += name[:10].ljust(12)
+            f.write(header + "\n")
+            f.write("-" * 70 + "\n")
 
-    print(f"Detailed report saved to: {report_path}")
+            for i, gt_name in enumerate(class_names):
+                row = gt_name[:18].ljust(20)
+                for j in range(len(class_names)):
+                    row += str(cm[i, j]).ljust(12)
+                f.write(row + "\n")
+
+        print(f"Detailed report saved to: {report_path}")
 
 
 # Main training function for detection
@@ -2236,14 +2083,14 @@ def main_detection_training():
         config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.0, val_split=0.2)
         prepared_dataset_dir = os.path.dirname(config_path)
 
-        print("\nStep 3: Applying selective minority oversampling...")
-        oversampled_dataset_dir = trainer.selective_minority_oversampling(
-            dataset_dir=prepared_dataset_dir,
-            target_samples_per_class=5000,
-            minority_threshold=2500,
-            max_replication_factor=8,
+        print("\nStep 3: Applying aggressive minority oversampling...")
+        oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
+            dataset_dir=prepared_dataset_dir, target_samples_per_class=6000, minority_threshold=2500
         )
+
+        # Update config path to point to oversampled dataset
         config_path = os.path.join(oversampled_dataset_dir, "data.yaml")
+        print(f"Using oversampled dataset config: {config_path}")
 
         print("\nStep 4: Initializing YOLO detection model...")
         if not trainer.initialize_yolo_detection_model():
