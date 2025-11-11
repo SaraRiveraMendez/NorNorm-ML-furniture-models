@@ -1497,7 +1497,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print(f"Validation visualizations saved to: {viz_dir}")
 
     def aggressive_minority_oversampling(
-        self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
+        self, dataset_dir, target_samples_per_class=6200, minority_threshold=4200
     ):
         """
         Aggressive oversampling of minority classes with strong augmentations.
@@ -2375,7 +2375,7 @@ def main_detection_training():
 
         print("\nStep 3: Applying aggressive minority oversampling...")
         oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
-            dataset_dir=prepared_dataset_dir, target_samples_per_class=6200, minority_threshold=3000
+            dataset_dir=prepared_dataset_dir, target_samples_per_class=6200, minority_threshold=4200
         )
 
         # Update config path to point to oversampled dataset
@@ -2397,7 +2397,7 @@ def main_detection_training():
         }
 
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=160, unfreeze_schedule=custom_schedule
+            config_path, epochs=210, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 6: Comprehensive validation of all checkpoints...")
