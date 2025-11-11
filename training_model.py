@@ -438,9 +438,9 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         elif imbalance_ratio > 20:
             # Power weighting for severe cases
-            power_weights = np.power(max_count / counts, 0.75)
+            power_weights = np.power(max_count / counts, 0.65)
             aggressive_weights = power_weights * 1.2
-            strategy = "power weighting (0.75 exp, 1.2x amplified)"
+            strategy = "power weighting (0.65 exp, 1.2x amplified)"
 
         elif imbalance_ratio > 10:
             # Enhanced square root for high imbalance
@@ -460,7 +460,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         rare_threshold = max_count * 0.05
         for i, count in enumerate(counts):
             if count < rare_threshold:
-                aggressive_weights[i] *= 3.0  # 3x boost for very rare classes
+                aggressive_weights[i] *= 2.0  # 2x boost for very rare classes
                 print(
                     f"Rare class boost applied: {list(valid_classes.keys())[i]} "
                     f"({count} samples)"
@@ -476,7 +476,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             # Gentle smoothing
             smoothed = np.copy(aggressive_weights)
             for i in range(1, len(smoothed) - 1):
-                smoothed[i] = 0.7 * aggressive_weights[i] + 0.15 * (
+                smoothed[i] = 0.6 * aggressive_weights[i] + 0.15 * (
                     aggressive_weights[i - 1] + aggressive_weights[i + 1]
                 )
             aggressive_weights = smoothed
@@ -604,9 +604,9 @@ class AdaptiveYOLOv12DetectionTrainer:
                                     weight=weighted_tensor, reduction="none"
                                 )(cls_preds, cls_targets)
 
-                                # Focal loss with alpha=2 for recall boost
+                                # Focal loss with alpha=1.5 for recall boost
                                 pt = torch.exp(-ce_loss)
-                                focal_loss = (1 - pt) ** 2 * ce_loss
+                                focal_loss = (1 - pt) ** 1.5 * ce_loss
 
                                 loss_dict["cls"] = focal_loss.mean()
 
