@@ -1208,6 +1208,294 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         return class_results
 
+    def _save_validation_comparison(self, all_results, best_overall):
+        """
+        Save detailed comparison of all checkpoint validations.
+
+        Args:
+            all_results (list): List of validation results for all checkpoints
+            best_overall (dict): Best performing checkpoint data
+        """
+        comparison_path = os.path.join(self.save_dir, "checkpoint_validation_comparison.json")
+
+        comparison_data = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "total_checkpoints_evaluated": len(all_results),
+            "best_checkpoint": {
+                "phase": best_overall["phase"],
+                "checkpoint": best_overall["checkpoint"],
+                "path": best_overall["path"],
+                "mAP50": best_overall["mAP50"],
+                "mAP50-95": best_overall["mAP50-95"],
+                "precision": best_overall["precision"],
+                "recall": best_overall["recall"],
+            },
+            "all_checkpoints": all_results,
+        }
+
+        with open(comparison_path, "w") as f:
+            json.dump(comparison_data, f, indent=2, default=str)
+
+        print(f"Checkpoint comparison saved: {comparison_path}")
+
+        # Also save as text report
+        report_path = os.path.join(self.save_dir, "checkpoint_validation_report.txt")
+
+        with open(report_path, "w") as f:
+            f.write("=" * 70 + "\n")
+            f.write("CHECKPOINT VALIDATION COMPARISON REPORT\n")
+            f.write("=" * 70 + "\n\n")
+
+            f.write(f"Evaluation timestamp: {comparison_data['timestamp']}\n")
+            f.write(f"Total checkpoints evaluated: {len(all_results)}\n\n")
+
+            f.write("=" * 70 + "\n")
+            f.write("ALL CHECKPOINTS PERFORMANCE\n")
+            f.write("=" * 70 + "\n")
+            f.write(
+                f"{'Phase':<8} {'Checkpoint':<12} {'mAP50':<10} {'mAP50-95':<10} "
+                f"{'Precision':<10} {'Recall':<10}\n"
+            )
+            f.write("-" * 70 + "\n")
+
+            for result in all_results:
+                marker = " <- BEST" if result == best_overall else ""
+                f.write(
+                    f"{result['phase']:<8} {result['checkpoint']:<12} "
+                    f"{result['mAP50']:<10.3f} {result['mAP50-95']:<10.3f} "
+                    f"{result['precision']:<10.3f} {result['recall']:<10.3f}{marker}\n"
+                )
+
+            f.write("\n" + "=" * 70 + "\n")
+            f.write("BEST OVERALL CHECKPOINT\n")
+            f.write("=" * 70 + "\n")
+            f.write(f"Phase:        {best_overall['phase']}\n")
+            f.write(f"Checkpoint:   {best_overall['checkpoint']}\n")
+            f.write(f"Path:         {best_overall['path']}\n")
+            f.write(f"mAP50:        {best_overall['mAP50']:.3f}\n")
+            f.write(f"mAP50-95:     {best_overall['mAP50-95']:.3f}\n")
+            f.write(f"Precision:    {best_overall['precision']:.3f}\n")
+            f.write(f"Recall:       {best_overall['recall']:.3f}\n")
+
+            if best_overall.get("class_results"):
+                f.write("\n" + "=" * 70 + "\n")
+                f.write("CLASS-WISE PERFORMANCE (BEST MODEL)\n")
+                f.write("=" * 70 + "\n")
+                f.write(
+                    f"{'Class':<20} {'Precision':<12} {'Recall':<12} "
+                    f"{'mAP50':<12} {'mAP50-95':<12}\n"
+                )
+                f.write("-" * 70 + "\n")
+
+                for class_result in best_overall["class_results"]:
+                    f.write(
+                        f"{class_result['class']:<20} "
+                        f"{class_result['precision']:<12.3f} "
+                        f"{class_result['recall']:<12.3f} "
+                        f"{class_result['mAP50']:<12.3f} "
+                        f"{class_result['mAP50-95']:<12.3f}\n"
+                    )
+
+        print(f"Validation report saved: {report_path}")
+
+        # Generate comparison visualizations
+        self._create_validation_visualizations(all_results, best_overall)
+
+    def _create_validation_visualizations(self, all_results, best_overall):
+        """
+        Create visualizations comparing checkpoint performances.
+
+        Args:
+            all_results (list): List of validation results
+            best_overall (dict): Best checkpoint data
+        """
+        viz_dir = os.path.join(self.save_dir, "validation_visualizations")
+        os.makedirs(viz_dir, exist_ok=True)
+
+        # Extract data for plotting
+        phases = []
+        checkpoints = []
+        map50_scores = []
+        map50_95_scores = []
+        precision_scores = []
+        recall_scores = []
+
+        for result in all_results:
+            label = f"P{result['phase']}-{result['checkpoint'][:4]}"
+            phases.append(label)
+            checkpoints.append(result["checkpoint"])
+            map50_scores.append(result["mAP50"])
+            map50_95_scores.append(result["mAP50-95"])
+            precision_scores.append(result["precision"])
+            recall_scores.append(result["recall"])
+
+        # Find best index
+        best_idx = all_results.index(best_overall)
+
+        # Plot 1: mAP Comparison
+        fig, ax = plt.subplots(figsize=(14, 6))
+        x = np.arange(len(phases))
+        width = 0.35
+
+        bars1 = ax.bar(
+            x - width / 2,
+            map50_scores,
+            width,
+            label="mAP50",
+            color=["gold" if i == best_idx else "skyblue" for i in range(len(phases))],
+        )
+        bars2 = ax.bar(
+            x + width / 2,
+            map50_95_scores,
+            width,
+            label="mAP50-95",
+            color=["orange" if i == best_idx else "lightcoral" for i in range(len(phases))],
+        )
+
+        ax.set_xlabel("Checkpoint", fontweight="bold")
+        ax.set_ylabel("mAP Score", fontweight="bold")
+        ax.set_title("Checkpoint mAP Comparison", fontsize=16, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(phases, rotation=45, ha="right")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim([0, 1.0])
+
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(viz_dir, "checkpoint_map_comparison.png"), dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # Plot 2: Precision and Recall
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        bars1 = ax.bar(
+            x - width / 2,
+            precision_scores,
+            width,
+            label="Precision",
+            color=["green" if i == best_idx else "lightgreen" for i in range(len(phases))],
+        )
+        bars2 = ax.bar(
+            x + width / 2,
+            recall_scores,
+            width,
+            label="Recall",
+            color=["darkblue" if i == best_idx else "lightblue" for i in range(len(phases))],
+        )
+
+        ax.set_xlabel("Checkpoint", fontweight="bold")
+        ax.set_ylabel("Score", fontweight="bold")
+        ax.set_title("Checkpoint Precision & Recall Comparison", fontsize=16, fontweight="bold")
+        ax.set_xticks(x)
+        ax.set_xticklabels(phases, rotation=45, ha="right")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+        ax.set_ylim([0, 1.0])
+
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(viz_dir, "checkpoint_precision_recall.png"), dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # Plot 3: Overall metrics progression
+        fig, ax = plt.subplots(figsize=(14, 6))
+
+        ax.plot(
+            phases, map50_scores, marker="o", linewidth=2, markersize=8, label="mAP50", color="blue"
+        )
+        ax.plot(
+            phases,
+            map50_95_scores,
+            marker="s",
+            linewidth=2,
+            markersize=8,
+            label="mAP50-95",
+            color="red",
+        )
+        ax.plot(
+            phases,
+            precision_scores,
+            marker="^",
+            linewidth=2,
+            markersize=8,
+            label="Precision",
+            color="green",
+        )
+        ax.plot(
+            phases,
+            recall_scores,
+            marker="v",
+            linewidth=2,
+            markersize=8,
+            label="Recall",
+            color="orange",
+        )
+
+        # Highlight best checkpoint
+        ax.scatter(
+            [phases[best_idx]],
+            [map50_95_scores[best_idx]],
+            s=300,
+            c="gold",
+            marker="*",
+            zorder=5,
+            label="Best Checkpoint",
+            edgecolors="black",
+            linewidths=2,
+        )
+
+        ax.set_xlabel("Checkpoint", fontweight="bold")
+        ax.set_ylabel("Score", fontweight="bold")
+        ax.set_title("Checkpoint Metrics Progression", fontsize=16, fontweight="bold")
+        ax.legend(loc="best")
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1.0])
+        plt.xticks(rotation=45, ha="right")
+
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(viz_dir, "checkpoint_progression.png"), dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        # Plot 4: Class-wise performance for best model (if available)
+        if best_overall.get("class_results"):
+            class_data = best_overall["class_results"]
+            class_names_list = [cr["class"] for cr in class_data]
+            class_precisions = [cr["precision"] for cr in class_data]
+            class_recalls = [cr["recall"] for cr in class_data]
+            class_map50 = [cr["mAP50"] for cr in class_data]
+
+            fig, ax = plt.subplots(figsize=(14, 8))
+            x = np.arange(len(class_names_list))
+            width = 0.25
+
+            ax.bar(x - width, class_precisions, width, label="Precision", color="skyblue")
+            ax.bar(x, class_recalls, width, label="Recall", color="lightcoral")
+            ax.bar(x + width, class_map50, width, label="mAP50", color="lightgreen")
+
+            ax.set_xlabel("Class", fontweight="bold")
+            ax.set_ylabel("Score", fontweight="bold")
+            ax.set_title("Best Model - Class-wise Performance", fontsize=16, fontweight="bold")
+            ax.set_xticks(x)
+            ax.set_xticklabels(class_names_list, rotation=45, ha="right")
+            ax.legend()
+            ax.grid(axis="y", alpha=0.3)
+            ax.set_ylim([0, 1.0])
+
+            plt.tight_layout()
+            plt.savefig(
+                os.path.join(viz_dir, "best_model_class_performance.png"),
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close()
+
+        print(f"Validation visualizations saved to: {viz_dir}")
+
     def aggressive_minority_oversampling(
         self, dataset_dir, target_samples_per_class=5000, minority_threshold=2500
     ):
@@ -2073,7 +2361,7 @@ def main_detection_training():
     """
     try:
         print("Initializing YOLOv12 Detection Trainer...")
-        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=16)
+        trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
         gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
@@ -2081,11 +2369,16 @@ def main_detection_training():
 
         print("\nStep 2: Preparing detection dataset...")
         config_path = trainer.prepare_detection_dataset(dataset_path, min_area=0.0, val_split=0.2)
+
+        # Extract the dataset directory from config path
         prepared_dataset_dir = os.path.dirname(config_path)
 
-        print("\nStep 3: Applying aggressive minority oversampling...")
-        oversampled_dataset_dir = trainer.aggressive_minority_oversampling(
-            dataset_dir=prepared_dataset_dir, target_samples_per_class=6000, minority_threshold=2500
+        print("\nStep 3: Applying selective minority oversampling...")
+        oversampled_dataset_dir = trainer.selective_minority_oversampling(
+            dataset_dir=prepared_dataset_dir,
+            target_samples_per_class=5000,
+            minority_threshold=2500,
+            max_replication_factor=8,
         )
 
         # Update config path to point to oversampled dataset
@@ -2098,15 +2391,16 @@ def main_detection_training():
 
         print("\nStep 5: Training with progressive unfreezing...")
         custom_schedule = {
-            0: 0.20,  # Detection heads (0-40)
-            40: 0.40,  # + Neck PAN (40-80)
-            80: 0.60,  # + Neck FPN (80-120)
-            120: 0.75,  # + Late backbone (120-160)
-            160: 0.90,  # + Mid backbone (160-200)
-            200: 1.0,  # Full model (200-210)
+            0: 0.20,  # Detection heads - 25 epochs
+            25: 0.40,  # + Neck PAN - 25 epochs
+            50: 0.60,  # + Neck FPN - 30 epochs
+            80: 0.75,  # + Late Backbone - 30 epochs
+            110: 0.90,  # + Mid Backbone - 35 epochs
+            145: 1.0,  # Full model - 15 epochs
         }
+
         training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=210, unfreeze_schedule=custom_schedule
+            config_path, epochs=160, unfreeze_schedule=custom_schedule
         )
 
         print("\nStep 6: Comprehensive validation of all checkpoints...")
@@ -2114,21 +2408,27 @@ def main_detection_training():
 
         if validation_results:
             best_model_path = validation_results["best_model_path"]
-            print(f"\nBest model: {best_model_path}")
+            print(f"\nBest model available at: {best_model_path}")
+            print(f"   Use this model for inference!")
 
             # Step 7: Generate custom confusion matrix
-            print("\nStep 7: Generating custom confusion matrix...")
-            confusion_results = trainer.generate_custom_confusion_matrix(
-                model_path=best_model_path,
-                config_path=config_path,
-                conf_threshold=0.30,
-                iou_threshold=0.5,
-                match_iou_threshold=0.5,
-                save_visualizations=True,
-            )
+            print("\nStep 7: Generating custom confusion matrix with optimal parameters...")
+            try:
+                confusion_results = trainer.generate_custom_confusion_matrix(
+                    model_path=best_model_path,
+                    config_path=config_path,
+                    conf_threshold=0.30,
+                    iou_threshold=0.5,
+                    match_iou_threshold=0.5,
+                    save_visualizations=True,
+                )
+                print("\nCustom confusion matrix generated successfully!")
+                print(f"Results saved to: {trainer.save_dir}/custom_confusion_matrix/")
+            except Exception as e:
+                print(f"\nWarning: Could not generate custom confusion matrix: {e}")
+                import traceback
 
-            print("\nCustom confusion matrix generated successfully!")
-            print(f"Results saved to: {trainer.save_dir}/custom_confusion_matrix/")
+                traceback.print_exc()
 
         # Cleanup
         if os.path.exists("dataset/"):
@@ -2136,6 +2436,13 @@ def main_detection_training():
 
         print("\n" + "=" * 60)
         print("DETECTION TRAINING COMPLETED SUCCESSFULLY!")
+        print("=" * 60)
+        print("Features implemented:")
+        print("  - Pure YOLO detection (no classification confusion)")
+        print("  - Aggressive class weighting for imbalanced datasets")
+        print("  - Selective minority oversampling (pure priority strategy)")
+        print("  - Detection-optimized progressive unfreezing")
+        print("  - Proper YOLO architecture understanding")
         print("=" * 60)
 
         return trainer
