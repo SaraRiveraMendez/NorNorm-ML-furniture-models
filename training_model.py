@@ -2364,7 +2364,7 @@ def main_detection_training():
         trainer = AdaptiveYOLOv12DetectionTrainer(model_size="s", img_size=640, batch_size=10)
 
         print("\nStep 1: Downloading dataset...")
-        gdrive_file_id = "11BZGKQFbwo5wT9d1zlWbYqzSV8MoMP2B"
+        gdrive_file_id = "1Mg12kzkSC4QnSTmCkm6NJkhXAIiIaYaM"
         dataset_path = trainer.download_and_extract_dataset(gdrive_file_id)
 
         print("\nStep 2: Preparing detection dataset...")
