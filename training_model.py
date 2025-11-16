@@ -22,7 +22,7 @@ from ultralytics import YOLO
 
 class AdaptiveYOLOv12DetectionTrainer:
     """
-    YOLOv12 Detection Trainer with aggressive class weighting and intelligent progressive unfreezing.
+    YOLOv12 Detection Trainer.
     Focuses purely on object detection with proper YOLO architecture understanding.
     """
 
@@ -73,15 +73,15 @@ class AdaptiveYOLOv12DetectionTrainer:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_zip_path = os.path.join(temp_dir, output_filename)
-            print("Descargando dataset desde Google Drive...")
+            print("Downloadng dataset from Google Drive...")
             gdown.download(url, temp_zip_path, quiet=False)
 
             extract_path = "dataset/"
-            print("Extrayendo dataset...")
+            print("Extracting dataset...")
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
-            # Buscar data.yaml en toda la jerarquía
+            # Searching data.yaml 
             yaml_path = None
             for root, dirs, files in os.walk(extract_path):
                 if "data.yaml" in files:
@@ -89,12 +89,12 @@ class AdaptiveYOLOv12DetectionTrainer:
                     break
 
             if yaml_path is None:
-                raise FileNotFoundError("No se encontró 'data.yaml' dentro del dataset extraído.")
+                raise FileNotFoundError("'data.yaml' was not found.")
 
-            # Ajustar extract_path para que sea la carpeta que contiene data.yaml
+    
             extract_path = os.path.dirname(yaml_path)
 
-            print(f"Dataset extraído correctamente. Archivo 'data.yaml' encontrado en: {yaml_path}")
+            print(f"Dataset extracted! 'data.yml' is in: {yaml_path}")
             return extract_path
 
     def prepare_detection_dataset(self, dataset_path, min_area=0.0, val_split=0.2):
