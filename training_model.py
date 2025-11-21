@@ -81,7 +81,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             with zipfile.ZipFile(temp_zip_path, "r") as zip_ref:
                 zip_ref.extractall(extract_path)
 
-            # Searching data.yaml 
+            # Searching data.yaml
             yaml_path = None
             for root, dirs, files in os.walk(extract_path):
                 if "data.yaml" in files:
@@ -91,7 +91,6 @@ class AdaptiveYOLOv12DetectionTrainer:
             if yaml_path is None:
                 raise FileNotFoundError("'data.yaml' was not found.")
 
-    
             extract_path = os.path.dirname(yaml_path)
 
             print(f"Dataset extracted! 'data.yml' is in: {yaml_path}")
@@ -900,7 +899,7 @@ class AdaptiveYOLOv12DetectionTrainer:
             "label_smoothing": 0.1,
             "conf": self.default_conf,
             "iou": 0.5,  # Detection-specific
-            "close_mosaic": 10,
+            "close_mosaic": 10,  # Detection-specific
         }
 
         # Phase-based training
@@ -1120,7 +1119,7 @@ class AdaptiveYOLOv12DetectionTrainer:
         print("-" * 70)
 
         for result in all_results:
-            marker = " 🏆" if result == best_overall else ""
+            marker = " Winner!" if result == best_overall else ""
             print(
                 f"{result['phase']:<8} {result['checkpoint']:<12} "
                 f"{result['mAP50']:<10.3f} {result['mAP50-95']:<10.3f} "
@@ -2395,10 +2394,6 @@ def main_detection_training():
             160: 0.90,  # + Mid backbone (160-200)
             200: 1.0,  # Full model (200-210)
         }
-
-        training_results = trainer.train_detection_model_with_progressive_unfreezing(
-            config_path, epochs=210, unfreeze_schedule=custom_schedule
-        )
 
         print("\nStep 6: Comprehensive validation of all checkpoints...")
         validation_results = trainer.validate_all_checkpoints(config_path)

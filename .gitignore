@@ -43,6 +43,7 @@ rotate_model_*
 data/
 dataset_/
 Unused_Models/
+Complete_training_plots/
 
 
 # Models

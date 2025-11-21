@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -13,28 +14,79 @@ def load_training_data(json_path):
 
 
 def extract_phase_metrics(phase_data):
-    """Extract metrics from phase results"""
-    results_dict = phase_data["results_dict"]
-    return {
-        "precision": results_dict["metrics/precision(B)"],
-        "recall": results_dict["metrics/recall(B)"],
-        "mAP50": results_dict["metrics/mAP50(B)"],
-        "mAP50-95": results_dict["metrics/mAP50-95(B)"],
-        "fitness": results_dict["fitness"],
-    }
+    """Extract metrics from phase results by parsing the results string"""
+    results_str = phase_data.get("results", "")
+
+    if not results_str:
+        print(f"Warning: No results found in phase {phase_data.get('phase', 'unknown')}")
+        return None
+
+    try:
+        # Try to extract from string format first
+        metrics = {}
+
+        # Pattern to find results_dict section
+        results_dict_pattern = r"results_dict: \{([^}]+)\}"
+        match = re.search(results_dict_pattern, results_str)
+
+        if match:
+            results_content = match.group(1)
+
+            # Extract individual metrics
+            precision_match = re.search(r"'metrics/precision\(B\)': ([\d.]+)", results_content)
+            recall_match = re.search(r"'metrics/recall\(B\)': ([\d.]+)", results_content)
+            map50_match = re.search(r"'metrics/mAP50\(B\)': ([\d.]+)", results_content)
+            map50_95_match = re.search(r"'metrics/mAP50-95\(B\)': ([\d.]+)", results_content)
+            fitness_match = re.search(r"'fitness': ([\d.]+)", results_content)
+
+            if all([precision_match, recall_match, map50_match, map50_95_match, fitness_match]):
+                return {
+                    "precision": float(precision_match.group(1)),
+                    "recall": float(recall_match.group(1)),
+                    "mAP50": float(map50_match.group(1)),
+                    "mAP50-95": float(map50_95_match.group(1)),
+                    "fitness": float(fitness_match.group(1)),
+                }
+
+        # Alternative: check if results is already a dict
+        if isinstance(phase_data.get("results"), dict):
+            results = phase_data["results"]
+            return {
+                "precision": results.get("metrics/precision(B)", 0),
+                "recall": results.get("metrics/recall(B)", 0),
+                "mAP50": results.get("metrics/mAP50(B)", 0),
+                "mAP50-95": results.get("metrics/mAP50-95(B)", 0),
+                "fitness": results.get("fitness", 0),
+            }
+
+        print(f"Warning: Could not parse metrics from phase {phase_data.get('phase', 'unknown')}")
+        return None
+
+    except Exception as e:
+        print(f"Error parsing metrics from phase {phase_data.get('phase', 'unknown')}: {e}")
+        return None
 
 
 def plot_metrics_over_phases(training_data, output_dir):
     """Plot main metrics evolution across training phases"""
     phases = training_data["phase_results"]
-    phase_numbers = [p["phase"] for p in phases]
 
-    metrics = {"precision": [], "recall": [], "mAP50": [], "mAP50-95": [], "fitness": []}
+    # Filter phases that have valid metrics
+    valid_phases = []
+    valid_metrics = {"precision": [], "recall": [], "mAP50": [], "mAP50-95": [], "fitness": []}
 
     for phase in phases:
         phase_metrics = extract_phase_metrics(phase)
-        for key in metrics.keys():
-            metrics[key].append(phase_metrics[key])
+        if phase_metrics:
+            valid_phases.append(phase)
+            for key in valid_metrics.keys():
+                valid_metrics[key].append(phase_metrics[key])
+
+    if not valid_phases:
+        print("No valid phases with metrics found!")
+        return
+
+    phase_numbers = [p["phase"] for p in valid_phases]
 
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
     fig.suptitle("Training Metrics Evolution Across Phases", fontsize=16, fontweight="bold")
@@ -51,7 +103,7 @@ def plot_metrics_over_phases(training_data, output_dir):
         ax = axes[idx // 3, idx % 3]
         ax.plot(
             phase_numbers,
-            metrics[metric_key],
+            valid_metrics[metric_key],
             marker="o",
             linewidth=2,
             markersize=8,
@@ -64,7 +116,7 @@ def plot_metrics_over_phases(training_data, output_dir):
         ax.grid(True, alpha=0.3)
         ax.legend()
 
-        for i, val in enumerate(metrics[metric_key]):
+        for i, val in enumerate(valid_metrics[metric_key]):
             ax.annotate(
                 f"{val:.3f}",
                 xy=(phase_numbers[i], val),
@@ -81,150 +133,28 @@ def plot_metrics_over_phases(training_data, output_dir):
     plt.close()
 
 
-def plot_per_class_map(training_data, output_dir):
-    """Plot mAP per class for each phase"""
-    phases = training_data["phase_results"]
-    class_names = training_data["dataset_info"]["classes"]
-
-    fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-    fig.suptitle("mAP@0.5 per Class Across Training Phases", fontsize=16, fontweight="bold")
-
-    for idx, phase in enumerate(phases):
-        ax = axes[idx // 3, idx % 3]
-        maps = phase["maps"]
-
-        bars = ax.bar(range(len(class_names)), maps, color="steelblue", alpha=0.7)
-        ax.set_xlabel("Class", fontsize=10)
-        ax.set_ylabel("mAP@0.5", fontsize=10)
-        ax.set_title(f'Phase {phase["phase"]}', fontsize=12, fontweight="bold")
-        ax.set_xticks(range(len(class_names)))
-        ax.set_xticklabels(class_names, rotation=45, ha="right", fontsize=9)
-        ax.grid(True, alpha=0.3, axis="y")
-
-        for bar, val in zip(bars, maps):
-            height = bar.get_height()
-            ax.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{val:.2f}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "per_class_map.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-
-def plot_class_comparison(training_data, output_dir):
-    """Compare class performance between first and last phase"""
-    phases = training_data["phase_results"]
-    class_names = training_data["dataset_info"]["classes"]
-
-    first_phase = phases[0]["maps"]
-    last_phase = phases[-1]["maps"]
-
-    x = np.arange(len(class_names))
-    width = 0.35
-
-    fig, ax = plt.subplots(figsize=(14, 8))
-    bars1 = ax.bar(
-        x - width / 2, first_phase, width, label="Phase 1", color="lightcoral", alpha=0.8
-    )
-    bars2 = ax.bar(
-        x + width / 2,
-        last_phase,
-        width,
-        label=f'Phase {phases[-1]["phase"]}',
-        color="lightgreen",
-        alpha=0.8,
-    )
-
-    ax.set_xlabel("Class", fontsize=12)
-    ax.set_ylabel("mAP@0.5", fontsize=12)
-    ax.set_title("Class Performance: First vs Last Phase", fontsize=14, fontweight="bold")
-    ax.set_xticks(x)
-    ax.set_xticklabels(class_names, rotation=45, ha="right")
-    ax.legend()
-    ax.grid(True, alpha=0.3, axis="y")
-
-    for bars in [bars1, bars2]:
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(
-                bar.get_x() + bar.get_width() / 2.0,
-                height,
-                f"{height:.2f}",
-                ha="center",
-                va="bottom",
-                fontsize=8,
-            )
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "class_comparison.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-
-def plot_training_configuration(training_data, output_dir):
-    """Plot training configuration and dataset information"""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-
-    # Progressive unfreezing schedule
-    schedule = training_data["progressive_unfreezing"]["schedule"]
-    epochs = [int(k) for k in schedule.keys()]
-    unfreezing = [schedule[k] for k in schedule.keys()]
-
-    ax1.plot(epochs, unfreezing, marker="o", linewidth=2, markersize=8, color="darkblue")
-    ax1.set_xlabel("Epoch", fontsize=12)
-    ax1.set_ylabel("Unfreezing Ratio", fontsize=12)
-    ax1.set_title("Progressive Unfreezing Schedule", fontsize=13, fontweight="bold")
-    ax1.grid(True, alpha=0.3)
-
-    for i, (e, u) in enumerate(zip(epochs, unfreezing)):
-        ax1.annotate(
-            f"{u}", xy=(e, u), xytext=(0, 10), textcoords="offset points", ha="center", fontsize=9
-        )
-
-    # Class distribution
-    class_counts = training_data["phase_results"][0]["nt_per_class"]
-    class_names = training_data["dataset_info"]["classes"]
-
-    bars = ax2.barh(class_names, class_counts, color="teal", alpha=0.7)
-    ax2.set_xlabel("Number of Instances", fontsize=12)
-    ax2.set_ylabel("Class", fontsize=12)
-    ax2.set_title("Dataset Class Distribution", fontsize=13, fontweight="bold")
-    ax2.grid(True, alpha=0.3, axis="x")
-
-    for bar, count in zip(bars, class_counts):
-        width = bar.get_width()
-        ax2.text(
-            width,
-            bar.get_y() + bar.get_height() / 2.0,
-            f"{count}",
-            ha="left",
-            va="center",
-            fontsize=9,
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
-        )
-
-    plt.tight_layout()
-    plt.savefig(output_dir / "training_configuration.png", dpi=300, bbox_inches="tight")
-    plt.close()
-
-
 def plot_metrics_summary_table(training_data, output_dir):
     """Create a summary table with all metrics"""
     phases = training_data["phase_results"]
 
-    fig, ax = plt.subplots(figsize=(12, len(phases) * 0.8 + 2))
+    # Filter phases with valid metrics
+    valid_phases = []
+    for phase in phases:
+        if extract_phase_metrics(phase):
+            valid_phases.append(phase)
+
+    if not valid_phases:
+        print("No valid phases for summary table")
+        return
+
+    fig, ax = plt.subplots(figsize=(12, len(valid_phases) * 0.8 + 2))
     ax.axis("tight")
     ax.axis("off")
 
     headers = ["Phase", "Epochs", "Precision", "Recall", "mAP@0.5", "mAP@0.5:0.95", "Fitness"]
     table_data = []
 
-    for phase in phases:
+    for phase in valid_phases:
         metrics = extract_phase_metrics(phase)
         row = [
             f"Phase {phase['phase']}",
@@ -290,36 +220,86 @@ def plot_class_weights(training_data, output_dir):
     plt.close()
 
 
+def safe_plot_function(plot_func, training_data, output_dir, plot_name):
+    """Wrapper para manejar errores en las funciones de plotting"""
+    try:
+        plot_func(training_data, output_dir)
+        print(f"  - {plot_name}... ✓")
+        return True
+    except Exception as e:
+        print(f"  - {plot_name}... ✗ (Error: {e})")
+        return False
+
+
+def debug_data_structure(training_data):
+    """Debug function to understand the data structure"""
+    print("\n=== DEBUG DATA STRUCTURE ===")
+    phases = training_data["phase_results"]
+
+    print(f"Number of phases: {len(phases)}")
+
+    for i, phase in enumerate(phases):
+        print(f"\n--- Phase {i} ---")
+        print(f"Keys: {list(phase.keys())}")
+
+        if "results" in phase:
+            results = phase["results"]
+            print(f"Results type: {type(results)}")
+            if isinstance(results, str):
+                print("Results is a string (needs parsing)")
+                # Print first 200 chars
+                print(f"Results preview: {results[:200]}...")
+            elif isinstance(results, dict):
+                print("Results is a dict")
+                print(f"Results keys: {list(results.keys())}")
+
+        if "maps" in phase:
+            maps = phase["maps"]
+            print(f"Maps type: {type(maps)}")
+            print(f"Maps length: {len(maps) if hasattr(maps, '__len__') else 'N/A'}")
+            if hasattr(maps, "__len__") and len(maps) > 0:
+                print(f"Maps preview: {maps[:5]}...")  # First 5 values
+
+
 def main():
-    json_path = Path("Models/YOLOv12_Detection_11-06-2025_04-13-31/training_summary.json")
+    json_path = Path(  # Change the plot
+        "C:/Users/rsara/OneDrive/Documents/NorNorm/NorNorm-ML-furniture-models/Models/YOLOv12_Detection_11-11-2025_03-40-12/training_summary.json"
+    )
     output_dir = Path("Complete_training_plots")
     output_dir.mkdir(exist_ok=True)
 
     print("Loading training data...")
-    training_data = load_training_data(json_path)
 
-    print("Generating plots...")
+    if not json_path.exists():
+        print(f"Error: JSON file not found at {json_path}")
+        return
 
-    print("  - Metrics evolution...")
-    plot_metrics_over_phases(training_data, output_dir)
+    try:
+        training_data = load_training_data(json_path)
+        print("Data loaded successfully!")
+    except Exception as e:
+        print(f"Error loading training data: {e}")
+        return
 
-    print("  - Per-class mAP...")
-    plot_per_class_map(training_data, output_dir)
+    # Debug: check data structure
+    debug_data_structure(training_data)
 
-    print("  - Class comparison...")
-    plot_class_comparison(training_data, output_dir)
+    print("\nGenerating plots...")
 
-    print("  - Training configuration...")
-    plot_training_configuration(training_data, output_dir)
+    plot_functions = [
+        (plot_metrics_over_phases, "Metrics evolution"),
+        (plot_metrics_summary_table, "Metrics summary table"),
+        (plot_class_weights, "Class weights"),
+    ]
 
-    print("  - Metrics summary table...")
-    plot_metrics_summary_table(training_data, output_dir)
+    successful_plots = 0
+    for plot_func, plot_name in plot_functions:
+        if safe_plot_function(plot_func, training_data, output_dir, plot_name):
+            successful_plots += 1
 
-    print("  - Class weights...")
-    plot_class_weights(training_data, output_dir)
-
-    print(f"\nAll plots saved successfully in '{output_dir}' directory")
-    print(f"Total plots generated: 6")
+    print(f"\nPlots generation completed!")
+    print(f"Successful: {successful_plots}/{len(plot_functions)}")
+    print(f"Output directory: '{output_dir.absolute()}'")
 
 
 if __name__ == "__main__":
