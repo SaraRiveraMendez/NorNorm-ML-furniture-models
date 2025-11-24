@@ -48,7 +48,7 @@ def load_model(model_name: str, phase_folder: str):
         model_name,
         phase_folder,
         "weights",
-        "best.pt",
+        "last.pt",
     )
     model = YOLO(model_path)
     model.fuse()
@@ -207,11 +207,9 @@ def paint_predictions(results: list[Results], image_path: str):
 
 if __name__ == "__main__":
 
-    model_name = "AdaptiveYOLOv12_Model(09-25-2025_09-20-09)"
-    phase_folder = "detection_phase_9"
-    image_file = (
-        "C:/Users/rsara/Downloads/4g5n6h37-planskiss_png.rf.37520ae43bae65c567f9667838ba461a.jpg"
-    )
+    model_name = "YOLOv12_Detection_11-11-2025_03-40-12"
+    phase_folder = "detection_phase_5"
+    image_file = "C:/Users/rsara/Downloads/5.jpg"
     conf = 0.3
 
     model = load_model(model_name=model_name, phase_folder=phase_folder)
