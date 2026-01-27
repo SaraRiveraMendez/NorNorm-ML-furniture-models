@@ -29,28 +29,26 @@ CLASS_COLORS = {
     18: (0, 191, 255),  # Deep Sky Blue
 }
 CLASSES = {
-    0: "CANTINE",
-    1: "HIGH-TABLE",
-    2: "LOUNGE",
-    3: "MEETING-TABLE",
-    4: "PHONEBOOTH",
-    5: "PLANTS",
-    6: "PRIVATE-DESK",
-    7: "PRIVATE-OFFICE",
-    8: "REST-FOR-1",
-    9: "REST-FOR-2",
-    10: "ROUND-TABLE",
-    11: "STORAGE",
+    0: "LOUNGE",
+    1: "MEETING-TABLE",
+    2: "PHONEBOOTH",
+    3: "PLANTS",
+    4: "PRIVATE-DESK",
+    5: "REST-FOR-1",
+    6: "REST-FOR-2",
+    7: "ROUND-TABLE",
+    8: "STORAGE",
 }
 
 
-def load_model(model_name: str):
+def load_model(model_name: str, phase_folder: str):
     model_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
-        "models",
+        "Models",
         model_name,
+        phase_folder,
         "weights",
-        "best.pt",
+        "last.pt",
     )
     model = YOLO(model_path)
     model.fuse()
@@ -62,11 +60,11 @@ def count_names(class_ids: list[str]):
     return dict(name_counts)
 
 
-def predict_model(model: YOLO, image_path: str, conf: float = 0.4) -> list[Results]:
+def predict_model(model: YOLO, image_path: str, conf: float = 0.3) -> list[Results]:
     return model.predict(  # type: ignore
         source=image_path,
         conf=conf,
-        # iou=iou_treshold,
+        iou=0.5,
     )
 
 
@@ -176,7 +174,7 @@ def paint_predictions(results: list[Results], image_path: str):
             start_point = (int(box[0].item()), int(box[1].item()))
             end_point = (int(box[2].item()), int(box[3].item()))
             color = CLASS_COLORS.get(class_ids_global[i], (0, 0, 255))
-            box_thickness = 3
+            box_thickness = 1
             cv2.rectangle(image_temp, start_point, end_point, color, box_thickness)
             text_conf = str(confidences_global[i])
             font = cv2.FONT_HERSHEY_DUPLEX
@@ -209,11 +207,12 @@ def paint_predictions(results: list[Results], image_path: str):
 
 if __name__ == "__main__":
 
-    model_name = ""
-    image_file = ""
-    conf = 0.4
+    model_name = "YOLOv12_Detection_11-11-2025_03-40-12"
+    phase_folder = "detection_phase_5"
+    image_file = "C:/Users/rsara/Downloads/5.jpg"
+    conf = 0.3
 
-    model = load_model(model_name=model_name)
+    model = load_model(model_name=model_name, phase_folder=phase_folder)
 
     image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
     image_path = os.path.join(image_dir, image_file)
